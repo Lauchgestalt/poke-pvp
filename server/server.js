@@ -2,12 +2,13 @@ const net = require('net');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const sirv = require('sirv');
 const { WebSocketServer } = require('ws');
 
 const EMULATOR_TCP_PORT = 8765;
-const PLAYER2_WS_PORT = 8766;
-const SCREEN_HTTP_PORT = 8767;
+const WEB_PORT = 8766;
 const SCREEN_FILE_PATH = path.join(__dirname, 'public', 'screen.png');
+const INTERFACE_BUILD_PATH = path.join(__dirname, '..', 'interface', 'build');
 
 let emulatorSocket = null;
 let emulatorBuffer = '';
@@ -55,7 +56,25 @@ tcpServer.listen(EMULATOR_TCP_PORT, () => {
   console.log(`[relay] listening for emulator on tcp://127.0.0.1:${EMULATOR_TCP_PORT}`);
 });
 
-const wss = new WebSocketServer({ port: PLAYER2_WS_PORT });
+const serveInterface = sirv(INTERFACE_BUILD_PATH, { single: true });
+
+const httpServer = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url.split('?')[0] === '/screen.png') {
+    fs.readFile(SCREEN_FILE_PATH, (err, data) => {
+      if (err) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+      res.end(data);
+    });
+    return;
+  }
+  serveInterface(req, res);
+});
+
+const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
 wss.on('connection', (ws) => {
   console.log('[relay] player 2 connected');
@@ -87,25 +106,6 @@ wss.on('connection', (ws) => {
   });
 });
 
-console.log(`[relay] listening for player 2 on ws://127.0.0.1:${PLAYER2_WS_PORT}`);
-
-const screenServer = http.createServer((req, res) => {
-  if (req.method === 'GET' && req.url.split('?')[0] === '/screen.png') {
-    fs.readFile(SCREEN_FILE_PATH, (err, data) => {
-      if (err) {
-        res.writeHead(404);
-        res.end();
-        return;
-      }
-      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
-      res.end(data);
-    });
-    return;
-  }
-  res.writeHead(404);
-  res.end();
-});
-
-screenServer.listen(SCREEN_HTTP_PORT, () => {
-  console.log(`[relay] serving screen preview on http://127.0.0.1:${SCREEN_HTTP_PORT}/screen.png`);
+httpServer.listen(WEB_PORT, () => {
+  console.log(`[relay] serving the interface + websocket + screenshot on http://127.0.0.1:${WEB_PORT}`);
 });

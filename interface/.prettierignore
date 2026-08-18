@@ -9,6 +9,7 @@ bun.lockb
 /static/
 
 .svelte-kit/
+build/
 tsconfig.json
 vite.config.ts
 prettier.config.js

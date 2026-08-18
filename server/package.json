@@ -9,6 +9,7 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "sirv": "^3.0.2",
     "ws": "^8.18.0"
   }
 }

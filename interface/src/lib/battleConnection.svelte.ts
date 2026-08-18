@@ -11,10 +11,14 @@ import type {
 	SetPlayer2Name
 } from './types';
 
-const WS_URL = 'ws://127.0.0.1:8766';
 const RECONNECT_DELAY_MS = 2000;
 const MAX_LOG_ENTRIES = 50;
 const MY_NAME_STORAGE_KEY = 'pokepvp-player2-name';
+
+function wsUrl(): string {
+	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+	return `${protocol}//${window.location.host}/ws`;
+}
 
 class BattleConnection {
 	status = $state('connecting...');
@@ -38,7 +42,7 @@ class BattleConnection {
 	}
 
 	private open() {
-		this.ws = new WebSocket(WS_URL);
+		this.ws = new WebSocket(wsUrl());
 
 		this.ws.onopen = () => {
 			this.connected = true;

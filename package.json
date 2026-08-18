@@ -1,0 +1,11 @@
+{
+  "name": "pokepvp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PokéPVP -- run/build orchestration for the interface + relay",
+  "scripts": {
+    "setup": "npm --prefix interface install && npm --prefix server install",
+    "build": "npm --prefix interface run build",
+    "start": "npm run build && node server/server.js"
+  }
+}

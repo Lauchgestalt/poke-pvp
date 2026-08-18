@@ -1,5 +1,10 @@
+-- ============================================================================
+-- The only thing you should ever need to edit in this file. Leave as-is if
+-- the relay (server/server.js) runs on this same machine, which is the
+-- normal setup -- only change this if you're running the relay elsewhere.
 local RELAY_HOST = "127.0.0.1"
 local RELAY_PORT = 8765
+-- ============================================================================
 
 local ADDR_BATTLE_TYPE_FLAGS = 0x02022FEC
 -- gMain.inBattle: a single bit that's TRUE exactly while a battle is running, FALSE otherwise.

@@ -82,74 +82,115 @@ Player 2 interacts with a web dashboard to select moves or switches, which are i
 | **Game ROM** | Pokémon Emerald (US) | Header `BPEE`. Memory addresses are hardcoded specifically for this binary layout. |
 | **Node.js** | `v18.0.0` or higher | Required for the relay server and web interface. |
 
+> [!WARNING]
+> If the detected ROM header isn't `BPEE`, memory addresses will misalign and command injection
+> will fail.
+
 ---
 
-## Quick Start
+## Running It
 
-### 1. Repository Setup
+Every setup below shares the same two building blocks:
 
-Clone the repository and install dependencies for both the server and interface modules:
+- **The relay** (`server.js`) — serves the web interface, the WebSocket, and the screenshot
+  preview, all on one port (`8766` by default). Started with `npm start` from the repo root, which
+  also builds the interface first.
+- **`lua/client.lua`**, loaded into mGBA — connects out to the relay at `RELAY_HOST:8765` (the one
+  constant at the very top of the file, `127.0.0.1` by default).
+
+What changes between setups is only *where* the relay runs and what address each piece points at.
+Pick the section that matches.
+
+### A. Same network (including just one machine)
+
+Covers solo testing on one PC, *and* the common case of two people in the same house on the same
+WiFi/LAN — neither needs a tunnel or any source edits, just possibly a different URL.
+
+Whoever's hosting runs:
 
 ```bash
-git clone https://github.com/Lauchestalt/poke-pvp.git
+git clone https://github.com/Lauchgestalt/poke-pvp.git
 cd poke-pvp
-
-# Install dependencies
-cd server && npm install
-cd ../interface && npm install
-
+npm run setup   # once
+npm start       # every session
 ```
 
-### 2. Run the Relay Server
+You'll see:
 
-```bash
-cd server
-node server.js
-
+```text
+[relay] listening for emulator on tcp://127.0.0.1:8765
+[relay] serving the interface + websocket + screenshot on http://127.0.0.1:8766
 ```
 
-### 3. Launch the Web Dashboard
-
-```bash
-cd interface
-npm run dev
-
-```
-
-Navigate to `http://localhost:5173` (or the printed URL) in Player 2's browser.
-
-### 4. Load the Emulator Script
-
-1. Open **mGBA** and load the **Pokémon Emerald (US)** ROM.
-2. Go to **Tools** → **Scripting...** → **File** → **Load Script**.
-3. Select `lua/client.lua`.
-4. Confirm successful loading in the mGBA console:
+Then, in mGBA: **Tools → Scripting… → File → Load Script**, select `lua/client.lua`, and confirm
+the console shows:
 
 ```text
 [client] connected to relay
 [client] PokePVP client.lua loaded (ROM: BPEE)
-
 ```
 
+Now, which URL to open depends on whether Player 2 is on the *same* computer or a *different* one
+on the same network:
+
+- **Same computer**: open `http://localhost:8766`.
+- **Different device, same WiFi/LAN**: find the host machine's local IP (Windows: `ipconfig`,
+  look for `IPv4 Address`; macOS/Linux: `ifconfig` or `ip addr`, look for something like
+  `192.168.x.x`), and have Player 2 open `http://<that-ip>:8766` instead. You may need to allow
+  the connection through the host's firewall the first time (Windows will prompt automatically).
+
+Either way, `RELAY_HOST` in `lua/client.lua` stays `127.0.0.1` — mGBA and the relay are still on
+the same machine, only *Player 2's* address changes.
+
+### B. Different networks, one person hosts everything
+
+Player 1 still runs mGBA *and* the relay together as in **Setup A**; Player 2 still only ever
+needs a browser. The difference is exposing the relay's port through a tunnel instead of just
+sharing a local IP:
+
+1. Do everything in **Setup A** above.
+2. Expose the relay's port with a tunnel. Cloudflare's free "quick tunnel" needs no account and no
+   config file:
+   ```bash
+   cloudflared tunnel --url http://localhost:8766
+   ```
+   ([install instructions](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) if you don't have `cloudflared` yet)
+3. It prints a `https://<random-name>.trycloudflare.com` URL. That's the
+   whole handoff for Player 2. The page derives its own WebSocket/screenshot connections from whatever address
+   loaded it, so the tunnel URL just works with no further setup.
+
+Still no source edits necessary. `RELAY_HOST` stays `127.0.0.1` because the relay and mGBA are on the same
+machine, regardless of how Player 2 reaches that machine from outside.
+
+> Port forwarding on your router is another way to make the relay reachable without a tunnel — but
+> exactly how depends entirely on your specific router's admin interface, so it's outside what we
+> can give instructions for here. A tunnel is the easier default for most people.
+
+The one downside: the tunnel URL is random and changes every time you restart `cloudflared`, so
+you re-share it each session.
+
+### C. Different networks, the relay hosted separately
+
+You can also run the relay somewhere permanent with a fixed address, instead of creating a new tunnel URL every
+session, at the cost of actually maintaining a small always-on service.
+
+1. On that separate machine: clone the repo, `npm run setup`, `npm start` (keep it running — e.g.
+   via `pm2` or a systemd service, so it survives you logging out).
+2. Open its firewall / security group on `8765` and `8766`.
+3. On Player 1's machine, clone the repo, edit the `RELAY_HOST` at the top of
+   `lua/client.lua` to that machine's address, then load the script into mGBA as usual.
+4. Player 2 opens `http://<that-machine's-address>:8766` directly. No tunnel needed; the
+   address is already public.
+
 > [!WARNING]
-> If the detected ROM header is not `BPEE`, memory addresses will misalign and command injection will fail.
+> The relay has no authentication at all — any WebSocket connection is treated as a legitimate
+> Player 2. Setup B's random, private-by-obscurity tunnel URL (or a same-network-only local IP)
+> is low-risk in practice; a standing public IP:port is a different story, since anyone who finds
+> it could inject moves into an active game. Fine for a small always-on box you trust, but don't
+> put it somewhere indexed or easily scanned without adding some form of access control first.
 
----
-
-## Network & Remote Configuration
-
-By default, PokéPVP binds all sockets to `127.0.0.1`.
-
-To play across different networks without port forwarding, host `server/server.js` on a public server or expose it using a reverse proxy/tunneling utility (e.g., Cloudflare Tunnel or ngrok).
-
-Update the target connection URLs in the codebase:
-
-* `RELAY_HOST` in `lua/client.lua`
-* `WS_URL` in `interface/src/lib/battleConnection.svelte.ts`
-* Screenshot URL in `interface/src/lib/components/ScreenPreview.svelte`
-
-> [!NOTE]
-> When serving the web interface over HTTPS, update WebSocket and image preview endpoints to `wss://` and `https://` respectively to satisfy browser CORS and security policies.
+> Making changes to the web interface itself? `npm run dev` inside `interface/` runs a normal Vite
+> dev server with hot reload, instead of the built-and-served flow above.
 
 ---
 
@@ -166,7 +207,7 @@ Update the target connection URLs in the codebase:
 | Subsystem | Stack | Responsibility |
 | --- | --- | --- |
 | **Emulator Hook** | `Lua` | Intercepts turn decisions via breakpoints, reads battle state, and writes injected commands into RAM. |
-| **Relay Server** | `Node.js` | Low-latency TCP-to-WebSocket bridge. Handles client messaging and serves live frame previews. |
+| **Relay Server** | `Node.js` | TCP↔WebSocket bridge, plus serves the built interface and the screenshot preview — all three over one port. |
 | **Web Dashboard** | `SvelteKit` / `Tailwind` | Remote interface for Player 2 featuring active party management, move selection, and live logs. |
 
 ---
@@ -175,14 +216,15 @@ Update the target connection URLs in the codebase:
 
 ```text
 pokepvp/
+├── package.json             # root-level setup/build/start scripts
 ├── lua/
-│   └── client.lua          # mGBA Lua RAM hooks, state extraction & turn injection
+│   └── client.lua           # mGBA Lua RAM hooks, state extraction & turn injection
 ├── server/
-│   └── server.js           # Node.js TCP <-> WebSocket relay & screenshot server
-└── interface/              # SvelteKit + Tailwind remote web application
+│   └── server.js            # relay: TCP <-> WebSocket, serves the built interface + screenshot
+└── interface/                # SvelteKit + Tailwind web application (built to interface/build)
     └── src/
-        ├── lib/            # State management, socket adapters, and UI components
-        └── routes/         # Layouts, dashboard views, and routing logic
+        ├── lib/             # State management, socket adapters, and UI components
+        └── routes/          # Layouts, dashboard views, and routing logic
 
 ```
 
