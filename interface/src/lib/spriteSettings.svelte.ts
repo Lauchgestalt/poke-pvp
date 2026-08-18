@@ -4,7 +4,8 @@ const STORAGE_KEY = 'pokepvp-sprite-style';
 
 class SpriteSettings {
 	styleId = $state(
-		(typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY)) || DEFAULT_SPRITE_STYLE_ID
+		(typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY)) ||
+			DEFAULT_SPRITE_STYLE_ID
 	);
 
 	setStyle(id: string) {

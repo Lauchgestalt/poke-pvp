@@ -26,7 +26,13 @@ export const SPRITE_STYLES: SpriteStyle[] = [
 		pixelArt: false,
 		url: (n) => `${BASE}/other/official-artwork/${n}.png`
 	},
-	{ id: 'home', label: 'Home', group: 'Other', pixelArt: false, url: (n) => `${BASE}/other/home/${n}.png` },
+	{
+		id: 'home',
+		label: 'Home',
+		group: 'Other',
+		pixelArt: false,
+		url: (n) => `${BASE}/other/home/${n}.png`
+	},
 	{
 		id: 'dream-world',
 		label: 'Dream World',
@@ -34,7 +40,13 @@ export const SPRITE_STYLES: SpriteStyle[] = [
 		pixelArt: false,
 		url: (n) => `${BASE}/other/dream-world/${n}.svg`
 	},
-	{ id: 'default', label: 'Classic', group: 'Other', pixelArt: true, url: (n) => `${BASE}/${n}.png` },
+	{
+		id: 'default',
+		label: 'Classic',
+		group: 'Other',
+		pixelArt: true,
+		url: (n) => `${BASE}/${n}.png`
+	},
 
 	{
 		id: 'red-blue',

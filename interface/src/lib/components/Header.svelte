@@ -61,7 +61,10 @@
 		>
 			<div>
 				<label for="player2-name" class="mb-1 block text-slate-500">Your trainer name</label>
-				<form class="flex items-center gap-1.5" onsubmit={(e) => (e.preventDefault(), submitName())}>
+				<form
+					class="flex items-center gap-1.5"
+					onsubmit={(e) => (e.preventDefault(), submitName())}
+				>
 					<input
 						id="player2-name"
 						bind:value={nameInput}

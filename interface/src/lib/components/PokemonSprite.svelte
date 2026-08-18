@@ -1,5 +1,10 @@
 <script lang="ts">
-	import { spriteUrl, fallbackSpriteUrl, isSpriteUrlKnownBad, markSpriteUrlFailed } from '$lib/data/spriteUrl';
+	import {
+		spriteUrl,
+		fallbackSpriteUrl,
+		isSpriteUrlKnownBad,
+		markSpriteUrlFailed
+	} from '$lib/data/spriteUrl';
 	import { spriteSettings } from '$lib/spriteSettings.svelte';
 	import { SPRITE_STYLES_BY_ID, DEFAULT_SPRITE_STYLE_ID } from '$lib/data/spriteStyles';
 
@@ -14,7 +19,7 @@
 		class?: string;
 		style?: string;
 	} = $props();
-	
+
 	let failed = $state(false);
 	$effect(() => {
 		species;

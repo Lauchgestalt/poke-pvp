@@ -5,9 +5,7 @@
 
 	const tabClass = (tab: 'battle' | 'stream') =>
 		`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left ${
-			activeTab === tab
-				? 'bg-cyan-500/10 text-cyan-400'
-				: 'cursor-not-allowed text-slate-600'
+			activeTab === tab ? 'bg-cyan-500/10 text-cyan-400' : 'cursor-not-allowed text-slate-600'
 		}`;
 </script>
 

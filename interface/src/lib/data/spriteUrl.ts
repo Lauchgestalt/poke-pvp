@@ -5,7 +5,8 @@ import { spriteSettings } from '../spriteSettings.svelte';
 export function spriteUrl(speciesId: number, styleId: string = spriteSettings.styleId): string {
 	const natDex = SPECIES_TO_NATIONAL_DEX[speciesId] ?? 0;
 	if (!natDex) return '';
-	const style = SPRITE_STYLES_BY_ID.get(styleId) ?? SPRITE_STYLES_BY_ID.get(DEFAULT_SPRITE_STYLE_ID)!;
+	const style =
+		SPRITE_STYLES_BY_ID.get(styleId) ?? SPRITE_STYLES_BY_ID.get(DEFAULT_SPRITE_STYLE_ID)!;
 	return style.url(natDex);
 }
 

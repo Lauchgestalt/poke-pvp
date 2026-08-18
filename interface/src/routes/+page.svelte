@@ -46,12 +46,16 @@
 					</div>
 
 					{#if state.mustSwitch}
-						<div class="mb-6 max-w-4xl mx-auto rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-center text-sm font-semibold text-amber-300">
+						<div
+							class="mx-auto mb-6 max-w-4xl rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-center text-sm font-semibold text-amber-300"
+						>
 							Your Pokemon fainted! Choose a replacement from the party list.
 						</div>
 					{:else}
-						<div class="mb-6 grid grid-cols-1 gap-3 max-w-4xl mx-auto sm:grid-cols-2">
-							<h2 class="col-span-2 mb-3 text-xs font-bold tracking-widest text-slate-500 uppercase">
+						<div class="mx-auto mb-6 grid max-w-4xl grid-cols-1 gap-3 sm:grid-cols-2">
+							<h2
+								class="col-span-2 mb-3 text-xs font-bold tracking-widest text-slate-500 uppercase"
+							>
 								Choose a move
 							</h2>
 							{#each Array(4) as _, i (i)}
@@ -62,7 +66,7 @@
 								<MoveButton
 									name={hasMove ? (MOVE_NAMES[moveId] ?? `Move #${moveId}`) : undefined}
 									type={hasMove ? (MOVE_TYPES[moveId] ?? 'Normal') : undefined}
-									pp={pp}
+									{pp}
 									disabled={!hasMove || pp <= 0 || battle.submitted}
 									onclick={() => battle.chooseMove(i)}
 								/>
@@ -70,7 +74,7 @@
 						</div>
 					{/if}
 
-					<div class="max-w-4xl mt-15 mx-auto">
+					<div class="mx-auto mt-15 max-w-4xl">
 						<BattleLog entries={battle.log} />
 					</div>
 				{:else}

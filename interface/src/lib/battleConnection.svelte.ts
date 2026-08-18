@@ -168,7 +168,9 @@ function isPlayerInfo(msg: unknown): msg is PlayerInfo {
 
 function isPlayer2NameAck(msg: unknown): msg is Player2NameAck {
 	return (
-		typeof msg === 'object' && msg !== null && (msg as { type?: unknown }).type === 'player2_name_ack'
+		typeof msg === 'object' &&
+		msg !== null &&
+		(msg as { type?: unknown }).type === 'player2_name_ack'
 	);
 }
 

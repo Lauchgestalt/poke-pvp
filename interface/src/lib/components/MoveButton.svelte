@@ -33,24 +33,27 @@
 		{disabled}
 		{onclick}
 	>
-		<div class="flex items-center gap-3 min-w-0">
+		<div class="flex min-w-0 items-center gap-3">
 			{#if type}
 				<span
-					class="inline-flex min-w-16 shrink-0 justify-center rounded-md px-2 py-0.5 text-center font-mono text-[11px] font-black uppercase tracking-wider text-slate-950 shadow-sm"
+					class="inline-flex min-w-16 shrink-0 justify-center rounded-md px-2 py-0.5 text-center font-mono text-[11px] font-black tracking-wider text-slate-950 uppercase shadow-sm"
 					style="background-color: {color};"
 				>
 					{type}
 				</span>
 			{/if}
 
-			<span class="truncate text-base font-extrabold tracking-wide text-white uppercase group-hover:text-cyan-300">
+			<span
+				class="truncate text-base font-extrabold tracking-wide text-white uppercase group-hover:text-cyan-300"
+			>
 				{name}
 			</span>
 		</div>
 
-		<div class="shrink-0 font-mono text-xs font-bold text-slate-400 pl-2">
+		<div class="shrink-0 pl-2 font-mono text-xs font-bold text-slate-400">
 			<span class="text-slate-500">PP</span>
-			<span class="text-white">{pp}</span>{#if maxPp}<span class="text-slate-600">/{maxPp}</span>{/if}
+			<span class="text-white">{pp}</span>{#if maxPp}<span class="text-slate-600">/{maxPp}</span
+				>{/if}
 		</div>
 	</button>
 {/if}
