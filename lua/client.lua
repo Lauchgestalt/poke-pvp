@@ -57,6 +57,8 @@ local GROWTH_SLOT_BY_PID24 = {
     [20] = 2, [21] = 3, [22] = 2, [23] = 3,
 }
 
+local RECONNECT_INTERVAL_FRAMES = 120 -- ~2s at 60fps
+
 local STATE_WAIT_ACTION_CASE_CHOSEN = 3
 local PLAYER_BATTLER_INDEX = 0
 local CONTROLLER_TWORETURNVALUES = 33
@@ -148,6 +150,10 @@ local screenshotCounter = 0
 
 local sock = nil
 local rxBuffer = ""
+-- Player 2's browser can turn the screenshot stream off (e.g. when screen-sharing over Discord
+-- instead), since relay and emulator aren't necessarily on the same machine as Player 2's
+-- browser -- capturing/encoding a frame ~10x/sec is real work worth skipping when nobody wants it.
+local streamEnabled = true
 -- pendingAction: nil, or {action="move", moveIndex=N}, or {action="switch", partySlot=N}
 local pendingAction = nil
 local awaitingAction = false
@@ -176,46 +182,85 @@ local player2Committed = false
 local pendingPlayerLogEntries = {}
 local flushPendingPlayerLogEntries -- defined later, forward-declared for use above its definition
 
-local function sendJSON(jsonLine)
+-- Called whenever the relay connection is lost or never came up, so the retry loop in onFrame
+-- picks it back up. Also re-arms playerNameSent -- a freshly (re)started relay has no memory of
+-- this session, so the player_info line needs to go out again once we're back on the wire.
+local function disconnect(reason)
     if sock then
-        sock:send(jsonLine .. "\n")
+        console:log("[client] disconnected from relay: " .. tostring(reason))
+        pcall(function() sock:close() end)
     end
+    sock = nil
+    rxBuffer = ""
+    playerNameSent = false
 end
 
 local function connect()
-    sock = socket.tcp()
-    local ok, err = sock:connect(RELAY_HOST, RELAY_PORT)
-    if not ok then
-        console:log("[client] connect failed: " .. tostring(err))
-        sock = nil
-        return
-    end
-    sock:add("received", function()
-        local data = sock:receive(4096)
-        if data then
-            rxBuffer = rxBuffer .. data
-            local nl = rxBuffer:find("\n")
-            while nl do
-                local line = rxBuffer:sub(1, nl - 1)
-                rxBuffer = rxBuffer:sub(nl + 1)
-                handleMessage(line)
-                nl = rxBuffer:find("\n")
+    local newSock = socket.tcp()
+    newSock:add("received", function()
+        if sock ~= newSock then return end
+        while true do
+            local data, err = newSock:receive(4096)
+            if data then
+                rxBuffer = rxBuffer .. data
+                local nl = rxBuffer:find("\n")
+                while nl do
+                    local line = rxBuffer:sub(1, nl - 1)
+                    rxBuffer = rxBuffer:sub(nl + 1)
+                    handleMessage(line)
+                    nl = rxBuffer:find("\n")
+                end
+            else
+                if err ~= socket.ERRORS.AGAIN then
+                    disconnect(err)
+                end
+                return
             end
         end
     end)
+    newSock:add("error", function(err)
+        if sock ~= newSock then return end
+        disconnect(err)
+    end)
+
+    local ok, err = newSock:connect(RELAY_HOST, RELAY_PORT)
+    if not ok then
+        console:log("[client] connect failed: " .. tostring(err))
+        pcall(function() newSock:close() end)
+        return
+    end
+    sock = newSock
     console:log("[client] connected to relay")
+end
+
+local function sendJSON(jsonLine)
+    if not sock then return end
+    local ok, err = pcall(function() sock:send(jsonLine .. "\n") end)
+    if not ok then
+        disconnect(err)
+    end
 end
 
 function handleMessage(line)
     -- Expected: {"type":"action_choice","action":"move","moveIndex":0}
     --        or {"type":"action_choice","action":"switch","partySlot":2}
     --        or {"type":"set_player2_name","name":"Ash"}
+    --        or {"type":"set_stream_enabled","enabled":true}
     if line:find('"type"%s*:%s*"set_player2_name"') then
         local name = line:match('"name"%s*:%s*"([^"]*)"')
         if name and name ~= "" then
             console:log("[client] Player 2 set their name: " .. name)
             player2Name = name
             sendJSON('{"type":"player2_name_ack","name":"' .. name .. '"}')
+        end
+        return
+    end
+
+    if line:find('"type"%s*:%s*"set_stream_enabled"') then
+        local enabled = line:match('"enabled"%s*:%s*(%a+)')
+        if enabled == "true" or enabled == "false" then
+            streamEnabled = (enabled == "true")
+            console:log("[client] screenshot stream " .. (streamEnabled and "enabled" or "disabled"))
         end
         return
     end
@@ -658,7 +703,17 @@ local function resetBattleLog()
     voluntarySwitchSlot = nil
 end
 
+local reconnectCounter = 0
+
 local function onFrame()
+    if not sock then
+        reconnectCounter = reconnectCounter + 1
+        if reconnectCounter >= RECONNECT_INTERVAL_FRAMES then
+            reconnectCounter = 0
+            connect()
+        end
+    end
+
     sendPlayerNameIfNeeded()
 
     local nowInBattle = isControllableBattle()
@@ -682,7 +737,7 @@ local function onFrame()
     end
     wasInBattle = nowInBattle
 
-    if isControllableBattle() then
+    if isControllableBattle() or not streamEnabled then
         screenshotCounter = 0
     else
         screenshotCounter = screenshotCounter + 1

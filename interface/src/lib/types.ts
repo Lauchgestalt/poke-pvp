@@ -50,3 +50,8 @@ export interface Player2NameAck {
 	type: 'player2_name_ack';
 	name: string;
 }
+
+export interface SetStreamEnabled {
+	type: 'set_stream_enabled';
+	enabled: boolean;
+}

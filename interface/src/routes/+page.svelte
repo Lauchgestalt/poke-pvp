@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { battle } from '$lib/battleConnection.svelte';
+	import { streamSettings } from '$lib/streamSettings.svelte';
 	import { MOVE_NAMES } from '$lib/data/moveNames';
 	import { MOVE_TYPES } from '$lib/data/moveTypes';
 	import Sidebar from '$lib/components/Sidebar.svelte';
@@ -11,7 +12,20 @@
 	import BattleLog from '$lib/components/BattleLog.svelte';
 	import ScreenPreview from '$lib/components/ScreenPreview.svelte';
 
-	const activeTab = $derived<'battle' | 'stream'>(battle.battleState ? 'battle' : 'stream');
+	let activeTab = $state<'battle' | 'stream'>(streamSettings.enabled ? 'stream' : 'battle');
+	let wasInBattle = false;
+
+	// Auto-switch on battle start/end, but only away from the battle tab if there's actually
+	// somewhere useful to go -- otherwise (stream off) just leave the user on the battle tab.
+	$effect(() => {
+		const inBattle = battle.battleState !== null;
+		if (inBattle && !wasInBattle) {
+			activeTab = 'battle';
+		} else if (!inBattle && wasInBattle && streamSettings.enabled) {
+			activeTab = 'stream';
+		}
+		wasInBattle = inBattle;
+	});
 
 	onMount(() => {
 		battle.connect();
@@ -19,11 +33,11 @@
 </script>
 
 <svelte:head>
-	<title>PokePVP -- Player 2</title>
+	<title>PokePVP</title>
 </svelte:head>
 
 <div class="flex min-h-screen bg-[#0a0e17] text-white">
-	<Sidebar {activeTab} />
+	<Sidebar {activeTab} onSelect={(tab) => (activeTab = tab)} />
 
 	<div class="flex flex-1 flex-col">
 		<Header {activeTab} />
@@ -42,7 +56,12 @@
 							accent="red"
 							playerId="1"
 						/>
-						<MonCard label="Player 2 (you)" mon={state.enemyActive} accent="blue" playerId="2" />
+						<MonCard
+							label={battle.myName ?? 'Player 2'}
+							mon={state.enemyActive}
+							accent="blue"
+							playerId="2"
+						/>
 					</div>
 
 					{#if state.mustSwitch}
@@ -78,9 +97,7 @@
 						<BattleLog entries={battle.log} />
 					</div>
 				{:else}
-					<div class="flex h-64 items-center justify-center text-slate-600">
-						{battle.status}
-					</div>
+					<div class="flex h-64 items-center justify-center text-slate-600">No active battle</div>
 				{/if}
 			</div>
 

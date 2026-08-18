@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { battle } from '$lib/battleConnection.svelte';
 	import { spriteSettings } from '$lib/spriteSettings.svelte';
+	import { streamSettings } from '$lib/streamSettings.svelte';
 	import { SPRITE_STYLES } from '$lib/data/spriteStyles';
 	import { Settings } from '@lucide/svelte';
 
@@ -84,6 +85,22 @@
 				{:else if battle.myName}
 					<span class="mt-1 block text-amber-400">not yet confirmed by mGBA</span>
 				{/if}
+			</div>
+
+			<div>
+				<label class="flex items-center justify-between gap-2">
+					<span class="text-slate-500">Screenshot stream</span>
+					<input
+						type="checkbox"
+						checked={streamSettings.enabled}
+						onchange={(e) => streamSettings.setEnabled(e.currentTarget.checked)}
+						class="h-4 w-4 accent-cyan-500"
+					/>
+				</label>
+				<p class="mt-1 text-[11px] text-slate-600">
+					Sends periodic screenshots of the game to this browser. Turn off if you're already
+					screen-sharing (e.g. in Discord) to save bandwidth over a tunnel.
+				</p>
 			</div>
 
 			<div>

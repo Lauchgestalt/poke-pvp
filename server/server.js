@@ -15,6 +15,7 @@ let emulatorBuffer = '';
 const player2Sockets = new Set();
 let lastPlayerInfoLine = null;
 let lastPlayerNameLine = null;
+let lastStreamEnabledLine = null;
 
 const tcpServer = net.createServer((socket) => {
   console.log('[relay] emulator connected');
@@ -23,6 +24,9 @@ const tcpServer = net.createServer((socket) => {
 
   if (lastPlayerNameLine) {
     socket.write(lastPlayerNameLine + '\n');
+  }
+  if (lastStreamEnabledLine) {
+    socket.write(lastStreamEnabledLine + '\n');
   }
 
   socket.on('data', (chunk) => {
@@ -88,6 +92,9 @@ wss.on('connection', (ws) => {
     console.log('[relay] from player 2:', line);
     if (line.includes('"type":"set_player2_name"')) {
       lastPlayerNameLine = line;
+    }
+    if (line.includes('"type":"set_stream_enabled"')) {
+      lastStreamEnabledLine = line;
     }
     if (emulatorSocket) {
       emulatorSocket.write(line + '\n');

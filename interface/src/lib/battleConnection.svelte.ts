@@ -8,7 +8,8 @@ import type {
 	BattleState,
 	Player2NameAck,
 	PlayerInfo,
-	SetPlayer2Name
+	SetPlayer2Name,
+	SetStreamEnabled
 } from './types';
 
 const RECONNECT_DELAY_MS = 2000;
@@ -95,7 +96,7 @@ class BattleConnection {
 		};
 	}
 
-	private send(msg: ActionChoice | SetPlayer2Name) {
+	private send(msg: ActionChoice | SetPlayer2Name | SetStreamEnabled) {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 		this.ws.send(JSON.stringify(msg));
 	}
@@ -110,6 +111,10 @@ class BattleConnection {
 		this.send({ type: 'action_choice', action: 'switch', partySlot });
 		this.submitted = true;
 		this.status = `sent switch to slot ${partySlot}, waiting for next turn...`;
+	}
+
+	setStreamEnabled(enabled: boolean) {
+		this.send({ type: 'set_stream_enabled', enabled });
 	}
 
 	setMyName(name: string) {
@@ -129,7 +134,7 @@ class BattleConnection {
 	}
 
 	private formatLogEntry(msg: BattleLog): string {
-		const who = msg.battler === 0 ? (this.playerName ?? 'Player 1') : 'Player 2';
+		const who = msg.battler === 0 ? (this.playerName ?? 'Player 1') : (this.myName ?? 'Player 2');
 		const species = SPECIES_NAMES[msg.speciesId] ?? `Species #${msg.speciesId}`;
 		if (msg.event === 'move') {
 			const name = MOVE_NAMES[msg.moveId] ?? `Move #${msg.moveId}`;
