@@ -22,7 +22,9 @@
 
 	let failed = $state(false);
 	$effect(() => {
+		// eslint-disable-next-line @typescript-eslint/no-unused-expressions
 		species;
+		// eslint-disable-next-line @typescript-eslint/no-unused-expressions
 		spriteSettings.styleId;
 		failed = false;
 	});

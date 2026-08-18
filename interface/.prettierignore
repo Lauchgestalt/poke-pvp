@@ -7,3 +7,10 @@ bun.lockb
 
 # Miscellaneous
 /static/
+
+.svelte-kit/
+tsconfig.json
+vite.config.ts
+prettier.config.js
+package.json
+eslint.config.js
