@@ -2,7 +2,7 @@
 	import { SPECIES_NAMES } from '$lib/data/speciesNames';
 	import { SPECIES_TYPES } from '$lib/data/speciesTypes';
 	import { typeColor } from '$lib/data/typeColors';
-	import { spriteUrl } from '$lib/data/spriteUrl';
+	import PokemonSprite from './PokemonSprite.svelte';
 	import type { ActiveMon } from '$lib/types';
 
 	let {
@@ -59,15 +59,12 @@
 			<div class="relative flex items-center justify-center w-full aspect-square max-w-35">
 				<div class="absolute bottom-2 w-full h-10 rounded-[50%] border {platformBg} shadow-inner"></div>
 				
-				{#if spriteUrl(mon.species)}
-					<img
-						src={spriteUrl(mon.species)}
-						alt={speciesName(mon.species)}
-						class="relative z-10 h-28 w-28 object-contain animate-float [image-rendering:pixelated] drop-shadow-[0_10px_8px_rgba(0,0,0,0.5)] {spriteFlip}"
-						style="animation-delay: {animDelay};"
-						loading="lazy"
-					/>
-				{/if}
+				<PokemonSprite
+					species={mon.species}
+					alt={speciesName(mon.species)}
+					class="relative z-10 h-28 w-28 object-contain animate-float drop-shadow-[0_10px_8px_rgba(0,0,0,0.5)] {spriteFlip}"
+					style="animation-delay: {animDelay};"
+				/>
 			</div>
 		</div>
 

@@ -171,6 +171,12 @@ local player2Committed = false
 local pendingPlayerLogEntries = {}
 local flushPendingPlayerLogEntries -- defined later, forward-declared for use above its definition
 
+local function sendJSON(jsonLine)
+    if sock then
+        sock:send(jsonLine .. "\n")
+    end
+end
+
 local function connect()
     sock = socket.tcp()
     local ok, err = sock:connect(RELAY_HOST, RELAY_PORT)
@@ -204,6 +210,7 @@ function handleMessage(line)
         if name and name ~= "" then
             console:log("[client] Player 2 set their name: " .. name)
             player2Name = name
+            sendJSON('{"type":"player2_name_ack","name":"' .. name .. '"}')
         end
         return
     end
@@ -221,12 +228,6 @@ function handleMessage(line)
             pendingAction = { action = "switch", partySlot = tonumber(partySlot) }
             console:log("[client] received action: switch to slot " .. partySlot)
         end
-    end
-end
-
-local function sendJSON(jsonLine)
-    if sock then
-        sock:send(jsonLine .. "\n")
     end
 end
 

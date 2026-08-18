@@ -13,11 +13,16 @@ let emulatorSocket = null;
 let emulatorBuffer = '';
 const player2Sockets = new Set();
 let lastPlayerInfoLine = null;
+let lastPlayerNameLine = null;
 
 const tcpServer = net.createServer((socket) => {
   console.log('[relay] emulator connected');
   emulatorSocket = socket;
   emulatorBuffer = '';
+
+  if (lastPlayerNameLine) {
+    socket.write(lastPlayerNameLine + '\n');
+  }
 
   socket.on('data', (chunk) => {
     emulatorBuffer += chunk.toString('utf8');
@@ -62,6 +67,9 @@ wss.on('connection', (ws) => {
   ws.on('message', (data) => {
     const line = data.toString('utf8');
     console.log('[relay] from player 2:', line);
+    if (line.includes('"type":"set_player2_name"')) {
+      lastPlayerNameLine = line;
+    }
     if (emulatorSocket) {
       emulatorSocket.write(line + '\n');
     } else {

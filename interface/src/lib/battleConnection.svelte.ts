@@ -6,6 +6,7 @@ import type {
 	BattleLog,
 	BattleStarted,
 	BattleState,
+	Player2NameAck,
 	PlayerInfo,
 	SetPlayer2Name
 } from './types';
@@ -25,6 +26,7 @@ class BattleConnection {
 	myName = $state<string | null>(
 		typeof localStorage !== 'undefined' ? localStorage.getItem(MY_NAME_STORAGE_KEY) : null
 	);
+	nameConfirmed = $state<string | null>(null);
 
 	private ws: WebSocket | null = null;
 	private started = false;
@@ -41,6 +43,7 @@ class BattleConnection {
 		this.ws.onopen = () => {
 			this.connected = true;
 			this.status = 'connected -- waiting for a battle...';
+			this.nameConfirmed = null;
 			if (this.myName) this.sendMyName(this.myName);
 		};
 
@@ -82,6 +85,8 @@ class BattleConnection {
 				this.pushLog(this.formatLogEntry(msg));
 			} else if (isPlayerInfo(msg)) {
 				this.playerName = msg.name;
+			} else if (isPlayer2NameAck(msg)) {
+				this.nameConfirmed = msg.name;
 			}
 		};
 	}
@@ -158,6 +163,12 @@ function isBattleLog(msg: unknown): msg is BattleLog {
 function isPlayerInfo(msg: unknown): msg is PlayerInfo {
 	return (
 		typeof msg === 'object' && msg !== null && (msg as { type?: unknown }).type === 'player_info'
+	);
+}
+
+function isPlayer2NameAck(msg: unknown): msg is Player2NameAck {
+	return (
+		typeof msg === 'object' && msg !== null && (msg as { type?: unknown }).type === 'player2_name_ack'
 	);
 }
 

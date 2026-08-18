@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { SPECIES_NAMES } from '$lib/data/speciesNames';
-	import { spriteUrl } from '$lib/data/spriteUrl';
+	import PokemonSprite from './PokemonSprite.svelte';
 	import type { PartyMon } from '$lib/types';
 
 	let {
@@ -52,14 +52,11 @@
 					onclick={() => onSwitch(mon.partySlot)}
 				>
 					<div class="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-900/80 border border-slate-800">
-						{#if spriteUrl(mon.species)}
-							<img
-								src={spriteUrl(mon.species)}
-								alt={speciesName(mon.species)}
-								class="h-10 w-10 object-contain [image-rendering:pixelated] transition-transform group-hover:scale-110"
-								loading="lazy"
-							/>
-						{/if}
+						<PokemonSprite
+							species={mon.species}
+							alt={speciesName(mon.species)}
+							class="h-10 w-10 object-contain transition-transform group-hover:scale-110"
+						/>
 					</div>
 
 					<div class="min-w-0 flex-1">

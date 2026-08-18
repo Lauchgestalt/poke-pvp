@@ -11,16 +11,7 @@
 	import BattleLog from '$lib/components/BattleLog.svelte';
 	import ScreenPreview from '$lib/components/ScreenPreview.svelte';
 
-	let activeTab = $state<'battle' | 'stream'>('stream');
-
-	let wasInBattle = false;
-	$effect(() => {
-		const inBattle = battle.battleState !== null;
-		if (inBattle !== wasInBattle) {
-			wasInBattle = inBattle;
-			activeTab = inBattle ? 'battle' : 'stream';
-		}
-	});
+	const activeTab = $derived<'battle' | 'stream'>(battle.battleState ? 'battle' : 'stream');
 
 	onMount(() => {
 		battle.connect();
@@ -32,7 +23,7 @@
 </svelte:head>
 
 <div class="flex min-h-screen bg-[#0a0e17] text-white">
-	<Sidebar {activeTab} onSelect={(tab) => (activeTab = tab)} />
+	<Sidebar {activeTab} />
 
 	<div class="flex flex-1 flex-col">
 		<Header {activeTab} />

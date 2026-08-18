@@ -45,3 +45,8 @@ export interface SetPlayer2Name {
 	type: 'set_player2_name';
 	name: string;
 }
+
+export interface Player2NameAck {
+	type: 'player2_name_ack';
+	name: string;
+}
