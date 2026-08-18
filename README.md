@@ -24,6 +24,15 @@ PokéPVP hooks into mGBA's execution loop via custom Lua memory manipulation. Wh
 
 Player 2 interacts with a web dashboard to select moves or switches, which are injected directly into mGBA's RAM prior to turn execution.
 
+> **Inspiration:** This project was inspired by [SmallAnt's YouTube video](https://www.youtube.com/watch?v=S3u7gQhrWZo), where a remote player controlled enemy trainers in real time.
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=S3u7gQhrWZo" target="_blank">
+    <img src="https://img.youtube.com/vi/S3u7gQhrWZo/maxresdefault.jpg" alt="SmallAnt PvP Concept Video" width="30%" style="border-radius: 8px;">
+  </a>
+  <br>
+</p>
+
 ---
 
 ## Key Features
@@ -137,24 +146,7 @@ Update the target connection URLs in the codebase:
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph Local ["Player 1 (Host)"]
-        mGBA["mGBA Emulator<br/><code>lua/client.lua</code>"]
-    end
-
-    subgraph Server ["Relay Engine"]
-        Relay["Node.js Server<br/><code>server/server.js</code>"]
-    end
-
-    subgraph Remote ["Player 2 (Remote)"]
-        WebUI["SvelteKit Interface<br/><code>interface/</code>"]
-    end
-
-    mGBA <== "TCP (State / Action Injection)" ==> Relay
-    Relay <== "WebSocket / HTTP" ==> WebUI
-
-```
+[![](https://mermaid.ink/img/pako:eNqNUslOwzAQ_RVrTkWKspTQJWorsQkQi6q2CAnCwU2mqSGxK8dhq_rvTBwqKjiALx6P3-aR15CoFCGCRa5ekyXXhl1NYh1LRqus5pnmqyW7UgnP2UMM45y_o2YBa52r0uzF8LjF1qs4OzokUL2x06LKuVF6MNfeaFCbjPKKe0kuUBqXyoFnmzsSKNO6_OU-Rf1CpqQ8QfJnpzITEn942yuC3JCo-1R-kXbcS9vwmo0Q__efYKEM7jy_zVpN7-cA7nB-e0G46QvmBi-FYRfSoF7wBHeSiG3P-zODHeVgOGQxzI7HrDU1nJJ47DAxQklSf0JbURA2HI6aKWzJzbQaNiWbquQZDZHPZ7PxF94GBgcyLVKIjK7QgQJ1wesjrGudGMwSCxp3RGXK9XMMsdwQZ8XlvVLFlqZVlS0hWvC8pFO1SinpieA0wm8IvQ71saqkgagdWgmI1vAGUbjvHvi-HwRhGPr9oOfAO0TdwO36vU7QCzqh32kfbBz4sI6-2-tauE_X_e5-v-0ApoK-23XzmxMlFyKDzSdizeeI?type=png)](https://mermaid.live/edit#pako:eNqNUFlPwkAQ_iubecKE9IByNZTEK2I0hgDGROvD0g5QbXfJdqsi4b873UJs9EH3ZWdmv2tnB5GMEXxYpvI9WnOl2e00VKFgdPJisVJ8s2a3MuIpewphkvItKuayxljm-iSE5yO2PNnV2SmByotdZkXKtVTDhbJHw9JklBbcjtIEhbaoHNpmWJNAEZflL_cZqjcyJeUpkj-7FKtE4A9v80SQOxK1XvIDqeaem4FdXYT4v_8UM6mx9v0Wa1Sznwt4wMX9NeFmb5hqvEk0uxYa1ZJHWEuSHGf2nxnMKodBwEKYn09YY6Y5JbHZaaQTKUj9BU1FQVgQjKotHMnVtio2JZvJ6BU1kcfz-eSAN4GhCSuVxOBrVWATMlQZL1vYlToh6DVmtG6fypir1xBCsSfOhotHKbMjTclitQZ_ydOcumITU9KLhNMKvyH0O1TnshAa_FbbSIC_gw_wvbbVcRzHdT3PcwZuvwlb8Huu1XP6Xbfvdj2n2-rsm_BpHB2r3zNwh54Hvfagtf8CzXXgFw)
 
 | Subsystem | Stack | Responsibility |
 | --- | --- | --- |
