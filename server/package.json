@@ -1,0 +1,13 @@
+{
+  "name": "pokepvp-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PokePVP relay server: TCP link to mGBA client.lua + WebSocket link to the Player 2 web UI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
