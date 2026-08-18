@@ -18,6 +18,21 @@ Player 1 plays locally in the mGBA emulator. Player 2 connects via a modern web 
 
 ---
 
+## Disclaimer
+
+This is an unofficial fan project. It is not affiliated with, endorsed by, or sponsored by
+Nintendo, Game Freak, Creatures Inc., or The Pokémon Company. Pokémon and all related names,
+characters, and assets are trademarks and copyrights of their respective owners.
+
+This repository does not include or distribute the mGBA emulator or any Pokémon ROM. Both are
+things you need to obtain yourself, and only legally — this project assumes you already own a
+legitimate copy of the game and are using it in accordance with its license. It also doesn't
+include any Pokémon sprite assets directly; the web interface fetches them at runtime from
+[PokeAPI's sprite repository](https://github.com/PokeAPI/sprites), which is not affiliated with
+this project either.
+
+---
+
 ## Overview
 
 PokéPVP hooks into mGBA's execution loop via custom Lua memory manipulation. When Player 1 enters a trainer battle, the client halts the enemy AI execution, extracts active battle state (species, moves, PP, party status), and transmits it to a Node.js relay server.
