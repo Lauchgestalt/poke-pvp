@@ -2,6 +2,8 @@ import { MOVE_NAMES } from './data/moveNames';
 import { SPECIES_NAMES } from './data/speciesNames';
 import type {
 	ActionChoice,
+	AuthResult,
+	Authenticate,
 	BattleEnded,
 	BattleLog,
 	BattleStarted,
@@ -15,6 +17,7 @@ import type {
 const RECONNECT_DELAY_MS = 2000;
 const MAX_LOG_ENTRIES = 50;
 const MY_NAME_STORAGE_KEY = 'pokepvp-player2-name';
+const AUTH_TOKEN_STORAGE_KEY = 'pokepvp-controller-token';
 
 function wsUrl(): string {
 	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -32,6 +35,10 @@ class BattleConnection {
 		typeof localStorage !== 'undefined' ? localStorage.getItem(MY_NAME_STORAGE_KEY) : null
 	);
 	nameConfirmed = $state<string | null>(null);
+	role = $state<'unknown' | 'controller' | 'spectator'>('unknown');
+	authToken = $state<string | null>(
+		typeof localStorage !== 'undefined' ? localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) : null
+	);
 
 	private ws: WebSocket | null = null;
 	private started = false;
@@ -49,6 +56,8 @@ class BattleConnection {
 			this.connected = true;
 			this.status = 'connected -- waiting for a battle...';
 			this.nameConfirmed = null;
+			this.role = 'unknown';
+			if (this.authToken) this.sendAuthToken(this.authToken);
 			if (this.myName) this.sendMyName(this.myName);
 		};
 
@@ -92,11 +101,13 @@ class BattleConnection {
 				this.playerName = msg.name;
 			} else if (isPlayer2NameAck(msg)) {
 				this.nameConfirmed = msg.name;
+			} else if (isAuthResult(msg)) {
+				this.role = msg.role;
 			}
 		};
 	}
 
-	private send(msg: ActionChoice | SetPlayer2Name | SetStreamEnabled) {
+	private send(msg: ActionChoice | SetPlayer2Name | SetStreamEnabled | Authenticate) {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 		this.ws.send(JSON.stringify(msg));
 	}
@@ -115,6 +126,18 @@ class BattleConnection {
 
 	setStreamEnabled(enabled: boolean) {
 		this.send({ type: 'set_stream_enabled', enabled });
+	}
+
+	setAuthToken(token: string) {
+		const trimmed = token.trim();
+		if (!trimmed) return;
+		this.authToken = trimmed;
+		localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, trimmed);
+		this.sendAuthToken(trimmed);
+	}
+
+	private sendAuthToken(token: string) {
+		this.send({ type: 'authenticate', token });
 	}
 
 	setMyName(name: string) {
@@ -180,6 +203,12 @@ function isPlayer2NameAck(msg: unknown): msg is Player2NameAck {
 		typeof msg === 'object' &&
 		msg !== null &&
 		(msg as { type?: unknown }).type === 'player2_name_ack'
+	);
+}
+
+function isAuthResult(msg: unknown): msg is AuthResult {
+	return (
+		typeof msg === 'object' && msg !== null && (msg as { type?: unknown }).type === 'auth_result'
 	);
 }
 

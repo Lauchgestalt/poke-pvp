@@ -86,7 +86,7 @@
 									name={hasMove ? (MOVE_NAMES[moveId] ?? `Move #${moveId}`) : undefined}
 									type={hasMove ? (MOVE_TYPES[moveId] ?? 'Normal') : undefined}
 									{pp}
-									disabled={!hasMove || pp <= 0 || battle.submitted}
+									disabled={!hasMove || pp <= 0 || battle.submitted || battle.role !== 'controller'}
 									onclick={() => battle.chooseMove(i)}
 								/>
 							{/each}
@@ -106,7 +106,7 @@
 				<PartySwitchList
 					party={state.enemyParty}
 					activeSlot={state.enemyActivePartySlot}
-					disabled={battle.submitted}
+					disabled={battle.submitted || battle.role !== 'controller'}
 					onSwitch={(slot) => battle.chooseSwitch(slot)}
 				/>
 			{/if}

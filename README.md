@@ -174,20 +174,37 @@ you re-share it each session.
 You can also run the relay somewhere permanent with a fixed address, instead of creating a new tunnel URL every
 session, at the cost of actually maintaining a small always-on service.
 
-1. On that separate machine: clone the repo, `npm run setup`, `npm start` (keep it running — e.g.
-   via `pm2` or a systemd service, so it survives you logging out).
+1. On that separate machine: clone the repo, `npm run setup`, then start the relay with
+   `EMULATOR_BIND_HOST=0.0.0.0 npm start` - the emulator port only listens on `127.0.0.1` by
+   default, since normally mGBA runs on the same machine as the relay; this setup is the one
+   exception, so it has to opt in explicitly. Keep it running (e.g. via `pm2` or a systemd
+   service, so it survives you logging out).
 2. Open its firewall / security group on `8765` and `8766`.
 3. On Player 1's machine, clone the repo, edit the `RELAY_HOST` at the top of
    `lua/client.lua` to that machine's address, then load the script into mGBA as usual.
 4. Player 2 opens `http://<that-machine's-address>:8766` directly. No tunnel needed; the
    address is already public.
 
+### Controller token (who's allowed to play)
+
+The relay prints a random **controller token** to its console every time it starts:
+
+```
+[relay] controller token: aB3xQ... (share this with Player 2, not spectators)
+```
+
+Anyone who opens the page can watch the stream and the live battle state, but only the browser
+that submits this token can actually pick moves, switch Pokémon, set a trainer name, or toggle the
+screenshot stream — everyone else is a read-only spectator. Send the token to Player 2 alongside
+the URL (Settings → Controller token), and don't post it anywhere public. Set `CONTROLLER_TOKEN`
+in the environment before `npm start` if you want a fixed token that survives restarts instead of
+a fresh random one each time.
+
 > [!WARNING]
-> The relay has no authentication at all — any WebSocket connection is treated as a legitimate
-> Player 2. Setup B's random, private-by-obscurity tunnel URL (or a same-network-only local IP)
-> is low-risk in practice; a standing public IP:port is a different story, since anyone who finds
-> it could inject moves into an active game. Fine for a small always-on box you trust, but don't
-> put it somewhere indexed or easily scanned without adding some form of access control first.
+> The controller token is the only thing standing between "Player 2" and anyone who has the URL —
+> treat it like a password. Setup B's random, private-by-obscurity tunnel URL (or a
+> same-network-only local IP) is low-risk in practice even without one; a standing public IP:port
+> (Setup C) is the case where it actually matters, since that address isn't secret at all.
 
 > Making changes to the web interface itself? `npm run dev` inside `interface/` runs a normal Vite
 > dev server with hot reload, instead of the built-and-served flow above.

@@ -248,7 +248,7 @@ function handleMessage(line)
     --        or {"type":"set_stream_enabled","enabled":true}
     if line:find('"type"%s*:%s*"set_player2_name"') then
         local name = line:match('"name"%s*:%s*"([^"]*)"')
-        if name and name ~= "" then
+        if name and name ~= "" and #name <= 20 then
             console:log("[client] Player 2 set their name: " .. name)
             player2Name = name
             sendJSON('{"type":"player2_name_ack","name":"' .. name .. '"}')
@@ -267,16 +267,20 @@ function handleMessage(line)
 
     local action = line:match('"action"%s*:%s*"(%a+)"')
     if action == "move" then
-        local moveIndex = line:match('"moveIndex"%s*:%s*(%d)')
-        if moveIndex then
-            pendingAction = { action = "move", moveIndex = tonumber(moveIndex) }
+        local moveIndex = tonumber(line:match('"moveIndex"%s*:%s*(%d+)'))
+        if moveIndex and moveIndex >= 0 and moveIndex <= 3 then
+            pendingAction = { action = "move", moveIndex = moveIndex }
             console:log("[client] received action: move " .. moveIndex)
+        else
+            console:log("[client] rejected out-of-range moveIndex: " .. tostring(moveIndex))
         end
     elseif action == "switch" then
-        local partySlot = line:match('"partySlot"%s*:%s*(%d)')
-        if partySlot then
-            pendingAction = { action = "switch", partySlot = tonumber(partySlot) }
+        local partySlot = tonumber(line:match('"partySlot"%s*:%s*(%d+)'))
+        if partySlot and partySlot >= 0 and partySlot <= 5 then
+            pendingAction = { action = "switch", partySlot = partySlot }
             console:log("[client] received action: switch to slot " .. partySlot)
+        else
+            console:log("[client] rejected out-of-range partySlot: " .. tostring(partySlot))
         end
     end
 end

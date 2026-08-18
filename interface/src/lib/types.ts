@@ -55,3 +55,14 @@ export interface SetStreamEnabled {
 	type: 'set_stream_enabled';
 	enabled: boolean;
 }
+
+export interface Authenticate {
+	type: 'authenticate';
+	token: string;
+}
+
+export interface AuthResult {
+	type: 'auth_result';
+	role: 'controller' | 'spectator';
+	reason?: 'invalid_token' | 'controller_taken';
+}
