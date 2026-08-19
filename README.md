@@ -74,6 +74,18 @@ Player 2 interacts with a web dashboard to select moves or switches, which are i
 
 ---
 
+## Roadmap
+
+| Feature | Status | Description
+| --- | --- | --- |
+| **Item Usage** | ![research](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/Repository.svg) Research | In-battle item usage (e.g., Potions, battle items) by Player 2 is currently disabled pending further reverse-engineering of item execution memory offsets. |
+| **Support for more editions** | ![planned](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueDrafted.svg) Planned | Currently, only Pokémon Emerald (US) is supported. Future work may include support for other Pokémon editions, after reverse-engineering their respective memory layouts. |
+| **Improved Battle UI** | ![planned](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueDrafted.svg) Planned | Enhancements to the web dashboard, getting the browser experience closer to the actual game. |
+| **Hosted Relay Service** | ![planned](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueDrafted.svg) Planned | A public relay service that allows players to connect without needing to host their own relay server. |
+| **Twitch Integration** | ![planned](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueDrafted.svg) Planned | Allowing Twitch viewers to vote on Player 2's actions. |
+
+---
+
 ## Prerequisites
 
 | Requirement | Specification | Notes |
@@ -213,12 +225,6 @@ a fresh random one each time.
 
 > Making changes to the web interface itself? `npm run dev` inside `interface/` runs a normal Vite
 > dev server with hot reload, instead of the built-and-served flow above.
-
----
-
-## Limitations
-
-* **Item Usage:** In-battle item usage (e.g., Potions, battle items) by Player 2 is currently disabled pending further reverse-engineering of item execution memory offsets.
 
 ---
 
