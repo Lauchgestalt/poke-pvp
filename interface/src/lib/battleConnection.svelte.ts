@@ -11,7 +11,8 @@ import type {
 	Player2NameAck,
 	PlayerInfo,
 	SetPlayer2Name,
-	SetStreamEnabled
+	SetStreamEnabled,
+	SetStreamFps
 } from './types';
 
 const RECONNECT_DELAY_MS = 2000;
@@ -39,9 +40,11 @@ class BattleConnection {
 	authToken = $state<string | null>(
 		typeof localStorage !== 'undefined' ? localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) : null
 	);
+	latestFrameUrl = $state<string | null>(null);
 
 	private ws: WebSocket | null = null;
 	private started = false;
+	private frameObjectUrl: string | null = null;
 
 	connect() {
 		if (this.started) return;
@@ -72,7 +75,14 @@ class BattleConnection {
 			this.status = 'connection error';
 		};
 
-		this.ws.onmessage = (event: MessageEvent<string>) => {
+		this.ws.onmessage = (event: MessageEvent<string | Blob>) => {
+			if (event.data instanceof Blob) {
+				if (this.frameObjectUrl) URL.revokeObjectURL(this.frameObjectUrl);
+				this.frameObjectUrl = URL.createObjectURL(event.data);
+				this.latestFrameUrl = this.frameObjectUrl;
+				return;
+			}
+
 			let msg: unknown;
 			try {
 				msg = JSON.parse(event.data);
@@ -82,6 +92,9 @@ class BattleConnection {
 			}
 			if (isBattleStarted(msg)) {
 				this.log = [];
+				if (this.frameObjectUrl) URL.revokeObjectURL(this.frameObjectUrl);
+				this.frameObjectUrl = null;
+				this.latestFrameUrl = null;
 			} else if (isBattleEnded(msg)) {
 				this.battleState = null;
 				this.submitted = false;
@@ -107,7 +120,9 @@ class BattleConnection {
 		};
 	}
 
-	private send(msg: ActionChoice | SetPlayer2Name | SetStreamEnabled | Authenticate) {
+	private send(
+		msg: ActionChoice | SetPlayer2Name | SetStreamEnabled | SetStreamFps | Authenticate
+	) {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 		this.ws.send(JSON.stringify(msg));
 	}
@@ -126,6 +141,10 @@ class BattleConnection {
 
 	setStreamEnabled(enabled: boolean) {
 		this.send({ type: 'set_stream_enabled', enabled });
+	}
+
+	setStreamFps(fps: number) {
+		this.send({ type: 'set_stream_fps', fps });
 	}
 
 	setAuthToken(token: string) {

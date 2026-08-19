@@ -15,8 +15,6 @@
 	let activeTab = $state<'battle' | 'stream'>(streamSettings.enabled ? 'stream' : 'battle');
 	let wasInBattle = false;
 
-	// Auto-switch on battle start/end, but only away from the battle tab if there's actually
-	// somewhere useful to go -- otherwise (stream off) just leave the user on the battle tab.
 	$effect(() => {
 		const inBattle = battle.battleState !== null;
 		if (inBattle && !wasInBattle) {

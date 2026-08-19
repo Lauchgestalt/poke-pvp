@@ -10,6 +10,7 @@
 	$effect(() => {
 		if (battle.connected) {
 			battle.setStreamEnabled(streamSettings.enabled);
+			battle.setStreamFps(streamSettings.fps);
 		}
 	});
 </script>

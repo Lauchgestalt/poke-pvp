@@ -56,6 +56,11 @@ export interface SetStreamEnabled {
 	enabled: boolean;
 }
 
+export interface SetStreamFps {
+	type: 'set_stream_fps';
+	fps: number;
+}
+
 export interface Authenticate {
 	type: 'authenticate';
 	token: string;

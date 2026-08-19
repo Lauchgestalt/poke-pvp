@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { battle } from '$lib/battleConnection.svelte';
 	import { spriteSettings } from '$lib/spriteSettings.svelte';
-	import { streamSettings } from '$lib/streamSettings.svelte';
+	import { streamSettings, MIN_STREAM_FPS, MAX_STREAM_FPS } from '$lib/streamSettings.svelte';
 	import { SPRITE_STYLES } from '$lib/data/spriteStyles';
 	import { Settings } from '@lucide/svelte';
 
@@ -138,6 +138,22 @@
 					Sends periodic screenshots of the game to this browser. Turn off if you're already
 					screen-sharing (e.g. in Discord) to save bandwidth over a tunnel.
 				</p>
+
+				<div class="mt-3 flex items-center justify-between gap-2">
+					<label for="stream-fps" class="text-slate-500">Stream framerate</label>
+					<span class="font-mono text-slate-300">{streamSettings.fps} fps</span>
+				</div>
+				<input
+					id="stream-fps"
+					type="range"
+					min={MIN_STREAM_FPS}
+					max={MAX_STREAM_FPS}
+					step="1"
+					value={streamSettings.fps}
+					disabled={battle.role !== 'controller'}
+					oninput={(e) => streamSettings.setFps(e.currentTarget.valueAsNumber)}
+					class="mt-1 h-1 w-full cursor-pointer appearance-none rounded-full bg-slate-700/50 accent-cyan-500 hover:bg-slate-700/70 disabled:cursor-not-allowed"
+				/>
 			</div>
 
 			<div>

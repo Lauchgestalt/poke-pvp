@@ -141,18 +141,53 @@ local function showBattleMessage(text)
     emu:writeRegister("pc", ADDR_BATTLE_PUT_TEXT_ON_WINDOW)
 end
 
--- Takes a screenshot of the game to disk periodically, for the web UI's "stream" view when no
--- trainer battle is in progress. Uses screenshotToImage()+Image:save() rather than the simpler
--- emu:screenshot() since the latter fails silently on some platforms.
-local SCREENSHOT_PATH = "C:/Users/jonas/Desktop/PokePVP/server/public/screen.png"
-local SCREENSHOT_INTERVAL_FRAMES = 6 -- ~10fps
-local screenshotCounter = 0
+
+local function scriptDir()
+    local source = debug.getinfo(1, "S").source
+    if source:sub(1, 1) == "@" then
+        source = source:sub(2)
+    end
+    return source:match("(.*[/\\])") or "./"
+end
+
+-- Lua 5.4 has no built-in base64 encoder. Standard table-based 3-byte -> 4-char implementation
+
+local BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function base64Encode(data)
+    local out = {}
+    for i = 1, #data, 3 do
+        local b1, b2, b3 = data:byte(i, i + 2)
+        local n = b1 * 0x10000 + (b2 or 0) * 0x100 + (b3 or 0)
+        local c1 = (n >> 18) & 0x3F
+        local c2 = (n >> 12) & 0x3F
+        local c3 = (n >> 6) & 0x3F
+        local c4 = n & 0x3F
+        local chunk = BASE64_CHARS:sub(c1 + 1, c1 + 1) .. BASE64_CHARS:sub(c2 + 1, c2 + 1)
+        chunk = chunk .. (b2 and BASE64_CHARS:sub(c3 + 1, c3 + 1) or "=")
+        chunk = chunk .. (b3 and BASE64_CHARS:sub(c4 + 1, c4 + 1) or "=")
+        out[#out + 1] = chunk
+    end
+    return table.concat(out)
+end
+
+-- Takes a screenshot periodically, for the web UI's "stream" view when no trainer battle is in
+-- progress. Captured to a local scratch file, then immediately
+-- read back and sent to the relay as a "screen_frame" message
+
+local SCREENSHOT_PATH = scriptDir() .. "screen_tmp.png"
+
+local GBA_FRAME_RATE = 60
+local MIN_STREAM_FPS = 5
+local MAX_STREAM_FPS = 24
+local screenshotTargetFps = MAX_STREAM_FPS -- overridable remotely, see "set_stream_fps" in handleMessage
+local screenshotAccumulator = 0
 
 local sock = nil
 local rxBuffer = ""
 -- Player 2's browser can turn the screenshot stream off (e.g. when screen-sharing over Discord
 -- instead), since relay and emulator aren't necessarily on the same machine as Player 2's
--- browser -- capturing/encoding a frame ~10x/sec is real work worth skipping when nobody wants it.
+-- browser -- capturing/encoding a frame ~24x/sec is real work worth skipping when nobody wants it.
 local streamEnabled = true
 -- pendingAction: nil, or {action="move", moveIndex=N}, or {action="switch", partySlot=N}
 local pendingAction = nil
@@ -265,6 +300,18 @@ function handleMessage(line)
         return
     end
 
+    if line:find('"type"%s*:%s*"set_stream_fps"') then
+        local fps = tonumber(line:match('"fps"%s*:%s*(%d+)'))
+        if fps and fps >= MIN_STREAM_FPS and fps <= MAX_STREAM_FPS then
+            screenshotTargetFps = fps
+            screenshotAccumulator = 0
+            console:log("[client] screenshot stream target: " .. fps .. "fps")
+        else
+            console:log("[client] rejected out-of-range stream fps: " .. tostring(fps))
+        end
+        return
+    end
+
     local action = line:match('"action"%s*:%s*"(%a+)"')
     if action == "move" then
         local moveIndex = tonumber(line:match('"moveIndex"%s*:%s*(%d+)'))
@@ -325,7 +372,22 @@ local function takeScreenshot()
         local saved = img:save(SCREENSHOT_PATH, "PNG")
         if not saved then
             console:log("[client] screenshot save failed: " .. SCREENSHOT_PATH)
+            return
         end
+
+        local f = io.open(SCREENSHOT_PATH, "rb")
+        if not f then
+            console:log("[client] could not reopen screenshot scratch file for reading")
+            return
+        end
+        local bytes = f:read("*a")
+        f:close()
+        if not bytes or #bytes == 0 then
+            console:log("[client] screenshot scratch file was empty")
+            return
+        end
+
+        sendJSON('{"type":"screen_frame","data":"' .. base64Encode(bytes) .. '"}')
     end)
     if not ok then
         console:log("[client] screenshot error: " .. tostring(err))
@@ -742,14 +804,24 @@ local function onFrame()
     wasInBattle = nowInBattle
 
     if isControllableBattle() or not streamEnabled then
-        screenshotCounter = 0
+        screenshotAccumulator = 0
     else
-        screenshotCounter = screenshotCounter + 1
-        if screenshotCounter >= SCREENSHOT_INTERVAL_FRAMES then
-            screenshotCounter = 0
+        screenshotAccumulator = screenshotAccumulator + screenshotTargetFps
+        if screenshotAccumulator >= GBA_FRAME_RATE then
+            screenshotAccumulator = screenshotAccumulator - GBA_FRAME_RATE
             takeScreenshot()
         end
     end
+end
+
+local EXPECTED_ROM_CODE = "BPEE"
+local romCode = emu:getGameCode()
+if romCode ~= EXPECTED_ROM_CODE then
+    console:error(
+        "[client] ROM mismatch: expected " .. EXPECTED_ROM_CODE .. " (Pokemon Emerald, US), got "
+        .. tostring(romCode) .. " instead. Refusing to run -- memory addresses would misalign."
+    )
+    return
 end
 
 emu:setBreakpoint(onOpponentHandleChooseAction, ADDR_OPPONENT_HANDLE_CHOOSE_ACTION)
@@ -762,4 +834,4 @@ emu:setBreakpoint(onBattlePutTextOnWindow, ADDR_BATTLE_PUT_TEXT_ON_WINDOW)
 callbacks:add("frame", onFrame)
 connect()
 
-console:log("[client] PokePVP client.lua loaded (ROM: " .. tostring(emu:getGameCode()) .. ")")
+console:log("[client] PokePVP client.lua loaded (ROM: " .. romCode .. ")")

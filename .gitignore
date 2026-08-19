@@ -29,4 +29,4 @@ vite.config.ts.timestamp-*
 .claude/
 
 #Screenshot for stream
-screen.png
+screen_tmp.png

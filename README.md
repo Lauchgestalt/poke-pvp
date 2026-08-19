@@ -82,9 +82,10 @@ Player 2 interacts with a web dashboard to select moves or switches, which are i
 | **Game ROM** | Pokémon Emerald (US) | Header `BPEE`. Memory addresses are hardcoded specifically for this binary layout. |
 | **Node.js** | `v18.0.0` or higher | Required for the relay server and web interface. |
 
-> [!WARNING]
-> If the detected ROM header isn't `BPEE`, memory addresses will misalign and command injection
-> will fail.
+> [!NOTE]
+> `client.lua` checks the loaded ROM's header on startup and refuses to run at all if it isn't
+> `BPEE` (logging an error in the mGBA console instead) — memory addresses are hardcoded for that
+> exact binary layout, and running against any other ROM would misalign every one of them.
 
 ---
 
@@ -184,6 +185,10 @@ session, at the cost of actually maintaining a small always-on service.
    `lua/client.lua` to that machine's address, then load the script into mGBA as usual.
 4. Player 2 opens `http://<that-machine's-address>:8766` directly. No tunnel needed; the
    address is already public.
+
+The screen stream (`Stream` tab) travels over the same TCP link to the relay and WebSocket link
+to the browser that everything else already uses, so no shared filesystem between mGBA's machine
+and the relay is needed.
 
 ### Controller token (who's allowed to play)
 
