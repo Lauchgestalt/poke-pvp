@@ -16,6 +16,8 @@
 	} = $props();
 
 	const speciesName = (id: number) => SPECIES_NAMES[id] ?? `Species #${id}`;
+	const displayName = (mon: PartyMon) =>
+		mon.nickname && mon.nickname.trim() !== '' ? mon.nickname : speciesName(mon.species);
 </script>
 
 <div
@@ -62,7 +64,7 @@
 					<div class="min-w-0 flex-1">
 						<div class="flex items-center justify-between gap-1.5">
 							<span class="truncate text-sm font-extrabold tracking-tight text-white">
-								{speciesName(mon.species)}
+								{displayName(mon)}
 							</span>
 
 							{#if isActive}

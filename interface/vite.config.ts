@@ -15,5 +15,13 @@ export default defineConfig({
 
 			adapter: adapter({ fallback: 'index.html' })
 		})
-	]
+	],
+	server: {
+		proxy: {
+			'/ws': {
+				target: 'ws://localhost:8766',
+				ws: true
+			}
+		}
+	}
 });

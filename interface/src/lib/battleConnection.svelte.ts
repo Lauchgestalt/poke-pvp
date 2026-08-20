@@ -180,7 +180,16 @@ class BattleConnection {
 		const species = SPECIES_NAMES[msg.speciesId] ?? `Species #${msg.speciesId}`;
 		if (msg.event === 'move') {
 			const name = MOVE_NAMES[msg.moveId] ?? `Move #${msg.moveId}`;
-			return `${species} (${who}) used ${name}!`;
+			if (msg.missed) {
+				return `${species} (${who}) used ${name}! But it missed!`;
+			}
+			const damageSuffix =
+				msg.damage === undefined
+					? ''
+					: msg.damage < 0
+						? ` (restored ${-msg.damage} HP)`
+						: ` (-${msg.damage} HP)`;
+			return `${species} (${who}) used ${name}!${damageSuffix}`;
 		}
 		return `${who} sent out ${species}!`;
 	}

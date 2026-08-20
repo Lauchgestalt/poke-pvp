@@ -39,11 +39,15 @@ local ADDR_ENEMY_MOVES = 0x020240E8
 local ADDR_ENEMY_PP = 0x02024100
 
 -- gEnemyParty (struct Pokemon[6], 0x64 bytes each). Species is encrypted with a per-mon key
--- derived from personality/OT ID; level/hp/maxHp are not.
+-- derived from personality/OT ID; level/hp/maxHp are not. Nickname readable directly at +0x08.
 local ADDR_GENEMY_PARTY = 0x02024744
 local ADDR_ENEMY_PARTY_INDEX = 0x02024070 -- which party slot is currently active (u16)
+-- gPlayerParty -- same struct/layout as gEnemyParty.
+local ADDR_GPLAYER_PARTY = 0x020244EC
 local PARTY_MON_SIZE = 0x64
 local PARTY_SIZE = 6
+local NICKNAME_OFFSET = 0x08
+local NICKNAME_MAX_CHARS = 10
 
 -- Which of the 4 encrypted substructures (Growth/Attacks/EVs/Misc) holds Growth data, indexed by
 -- personality % 24. From Bulbapedia's Gen 3 substructure order table.
@@ -70,7 +74,6 @@ local HEARTBEAT_INTERVAL_FRAMES = 30
 -- Used only for the battle log (detecting what each battler just did), not for injection.
 local ADDR_CHOSEN_MOVE_BY_BATTLER = 0x02024274
 local ADDR_CHOSEN_ACTION_BY_BATTLER = 0x0202421C
-local ADDR_BATTLER_PARTY_INDEX_0 = 0x0202406E
 local ADDR_BATTLE_COMMUNICATION_0 = 0x02024332
 local B_ACTION_USE_MOVE = 0
 
@@ -217,6 +220,11 @@ local player2Committed = false
 local pendingPlayerLogEntries = {}
 local flushPendingPlayerLogEntries -- defined later, forward-declared for use above its definition
 
+-- Move log entries are queued when chosen, then only actually sent once the target's HP proves
+-- the move executed
+local pendingMoveLog = { [0] = nil, [1] = nil }
+local lastMoveLogHp = { [0] = -1, [1] = -1 }
+
 -- Called whenever the relay connection is lost or never came up, so the retry loop in onFrame
 -- picks it back up. Also re-arms playerNameSent -- a freshly (re)started relay has no memory of
 -- this session, so the player_info line needs to go out again once we're back on the wire.
@@ -343,6 +351,35 @@ local function emitBattleLog(battler, jsonLine)
     end
 end
 
+-- Queues raw data rather than a pre-built JSON string -- damage isn't known until the move
+-- actually resolves (flush time), so the JSON can't be assembled yet.
+local function queueMoveLog(battler, moveId, speciesId)
+    pendingMoveLog[battler] = { moveId = moveId, speciesId = speciesId }
+end
+
+-- Sends `attacker`'s queued move log entry, if any -- called once the target's HP proves the
+-- move actually executed, or once battle text confirms it missed. `damage` is the HP the target
+-- lost (can be negative for a draining move that healed the attacker instead -- the interface
+-- displays that as healing, not damage); nil when `missed` is true, or when flushed via the
+-- safety net in onOpponentHandleChooseAction
+local function flushMoveLog(attacker, damage, missed)
+    local entry = pendingMoveLog[attacker]
+    if not entry then return end
+    pendingMoveLog[attacker] = nil
+    if attacker == 0 and not player2Committed then return end
+    local extraField = missed and ',"missed":true'
+        or (damage and string.format(',"damage":%d', damage))
+        or ""
+    sendJSON(string.format(
+        '{"type":"battle_log","battler":%d,"event":"move","moveId":%d,"speciesId":%d%s}',
+        attacker, entry.moveId, entry.speciesId, extraField))
+end
+
+-- Discards battler `battler`'s own still-queued entry
+local function discardMoveLog(battler)
+    pendingMoveLog[battler] = nil
+end
+
 local function isInBattle()
     return (emu:read8(ADDR_GMAIN_IN_BATTLE) & MASK_GMAIN_IN_BATTLE) ~= 0
 end
@@ -448,12 +485,44 @@ local function substitutePlayer1TrainerName(bufferAddr)
     end
 end
 
+-- Tracks which battler's turn is currently being narrated in battle text, so a "missed" message
+-- (which carries no battler info by itself) can be attributed to the right one.
+local currentlyResolvingBattler = nil
+
 local function onBattlePutTextOnWindow()
     if not isControllableBattle() then return end
-    local ok, err = pcall(substitutePlayer1TrainerName, emu:readRegister("r0"))
+    local ok, err = pcall(function()
+        local textAddr = emu:readRegister("r0")
+        local text = decodeGen3Bytes(textAddr, BATTLE_TEXT_SEARCH_WINDOW)
+        if text:find(" used ", 1, true) then
+            currentlyResolvingBattler = (text:sub(1, 4) == "Foe ") and 1 or 0
+        elseif text:find("missed", 1, true) and currentlyResolvingBattler ~= nil then
+            flushMoveLog(currentlyResolvingBattler, nil, true)
+            currentlyResolvingBattler = nil
+        end
+        substitutePlayer1TrainerName(textAddr)
+    end)
     if not ok then
-        console:log("[client] trainer name substitution error: " .. tostring(err))
+        console:log("[client] battle text handling error: " .. tostring(err))
     end
+end
+
+local STATUS1_SLEEP_MASK = 0x07 -- bits 0-2, a turn counter rather than a single flag -- asleep if nonzero
+local STATUS1_POISON = 0x08
+local STATUS1_BURN = 0x10
+local STATUS1_FREEZE = 0x20
+local STATUS1_PARALYSIS = 0x40
+local STATUS1_TOXIC_POISON = 0x80
+
+-- Decodes gBattleMons[].status1 into a short label, or nil if healthy.
+local function decodeStatus1(status1)
+    if status1 & STATUS1_FREEZE ~= 0 then return "frozen" end
+    if status1 & STATUS1_TOXIC_POISON ~= 0 then return "badly poisoned" end
+    if status1 & STATUS1_POISON ~= 0 then return "poisoned" end
+    if status1 & STATUS1_BURN ~= 0 then return "burned" end
+    if status1 & STATUS1_PARALYSIS ~= 0 then return "paralyzed" end
+    if status1 & STATUS1_SLEEP_MASK ~= 0 then return "asleep" end
+    return nil
 end
 
 local function readActiveMon(base)
@@ -461,7 +530,13 @@ local function readActiveMon(base)
     local hp = emu:read16(base + 0x28)
     local level = emu:read8(base + 0x2A)
     local maxHp = emu:read16(base + 0x2C)
-    return species, hp, maxHp, level
+    local status1 = emu:read32(base + 0x4C)
+    local personality = emu:read32(base + 0x48)
+    return species, hp, maxHp, level, status1, personality
+end
+
+local function readNickname(partyMonBase)
+    return decodeGen3Bytes(partyMonBase + NICKNAME_OFFSET, NICKNAME_MAX_CHARS)
 end
 
 local function readPartyMon(base)
@@ -474,25 +549,44 @@ local function readPartyMon(base)
     local level = emu:read8(base + 0x54)
     local hp = emu:read16(base + 0x56)
     local maxHp = emu:read16(base + 0x58)
-    return species, hp, maxHp, level
+    local nickname = readNickname(base)
+    return species, hp, maxHp, level, nickname
 end
 
 local function buildPartyJSON(baseAddr)
     local parts = {}
     for i = 0, PARTY_SIZE - 1 do
-        local species, hp, maxHp, level = readPartyMon(baseAddr + i * PARTY_MON_SIZE)
+        local species, hp, maxHp, level, nickname = readPartyMon(baseAddr + i * PARTY_MON_SIZE)
         if species ~= 0 then
             table.insert(parts, string.format(
-                '{"partySlot":%d,"species":%d,"hp":%d,"maxHp":%d,"level":%d}',
-                i, species, hp, maxHp, level))
+                '{"partySlot":%d,"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s"}',
+                i, species, hp, maxHp, level, nickname))
         end
     end
     return "[" .. table.concat(parts, ",") .. "]"
 end
 
+-- Finds which party slot holds the mon currently on the battlefield, by matching personality
+-- against gBattleMons's authoritative data
+local function findActivePartySlot(partyBase, personality)
+    for i = 0, PARTY_SIZE - 1 do
+        local slotPersonality = emu:read32(partyBase + i * PARTY_MON_SIZE)
+        if slotPersonality == personality then
+            return i
+        end
+    end
+    return 0 -- shouldn't happen with a valid personality, but never return nil
+end
+
 -- msgType: "battle_state" for a genuine new decision request ("your turn"), "battle_update" for a
 -- passive HP/status refresh. mustSwitch: true when the enemy's active mon just fainted and
 -- Player 2 may only pick a replacement this turn.
+-- Formats an optional string as a JSON string literal, or the bare `null` token when absent
+local function jsonOptionalString(value)
+    if value == nil then return "null" end
+    return '"' .. value .. '"'
+end
+
 local function extractEnemyState(msgType, mustSwitch)
     local moveIds = {}
     local pp = {}
@@ -500,19 +594,22 @@ local function extractEnemyState(msgType, mustSwitch)
         moveIds[i + 1] = emu:read16(ADDR_ENEMY_MOVES + i * 2)
         pp[i + 1] = emu:read8(ADDR_ENEMY_PP + i)
     end
-    local eSpecies, eHp, eMaxHp, eLevel = readActiveMon(ADDR_ENEMY_ACTIVE)
-    local pSpecies, pHp, pMaxHp, pLevel = readActiveMon(ADDR_PLAYER_ACTIVE)
-    local activePartySlot = emu:read16(ADDR_ENEMY_PARTY_INDEX)
+    local eSpecies, eHp, eMaxHp, eLevel, eStatus1, ePersonality = readActiveMon(ADDR_ENEMY_ACTIVE)
+    local pSpecies, pHp, pMaxHp, pLevel, pStatus1, pPersonality = readActiveMon(ADDR_PLAYER_ACTIVE)
+    local activePartySlot = findActivePartySlot(ADDR_GENEMY_PARTY, ePersonality)
+    local playerActivePartySlot = findActivePartySlot(ADDR_GPLAYER_PARTY, pPersonality)
+    local eNickname = readNickname(ADDR_GENEMY_PARTY + activePartySlot * PARTY_MON_SIZE)
+    local pNickname = readNickname(ADDR_GPLAYER_PARTY + playerActivePartySlot * PARTY_MON_SIZE)
     return string.format(
         '{"type":"%s","mustSwitch":%s,"enemyMoveIds":[%d,%d,%d,%d],"pp":[%d,%d,%d,%d],'
-        .. '"enemyActive":{"species":%d,"hp":%d,"maxHp":%d,"level":%d},'
-        .. '"playerActive":{"species":%d,"hp":%d,"maxHp":%d,"level":%d},'
+        .. '"enemyActive":{"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","status":%s},'
+        .. '"playerActive":{"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","status":%s},'
         .. '"enemyActivePartySlot":%d,'
         .. '"enemyParty":%s}',
         msgType, mustSwitch and "true" or "false",
         moveIds[1], moveIds[2], moveIds[3], moveIds[4], pp[1], pp[2], pp[3], pp[4],
-        eSpecies, eHp, eMaxHp, eLevel,
-        pSpecies, pHp, pMaxHp, pLevel,
+        eSpecies, eHp, eMaxHp, eLevel, eNickname, jsonOptionalString(decodeStatus1(eStatus1)),
+        pSpecies, pHp, pMaxHp, pLevel, pNickname, jsonOptionalString(decodeStatus1(pStatus1)),
         activePartySlot,
         buildPartyJSON(ADDR_GENEMY_PARTY))
 end
@@ -525,6 +622,11 @@ local function onOpponentHandleChooseAction()
     end
 
     if not awaitingAction then
+        -- Safety net: a move that missed, or a pure status/stat move with no HP change, never
+        -- triggers the HP-based flush in checkBattleLog() and would otherwise sit queued forever.
+        flushMoveLog(0)
+        flushMoveLog(1)
+
         awaitingAction = true
         pendingAction = nil
         steeringArmed = false
@@ -686,9 +788,7 @@ local function onHandleTurnActionSelection()
         -- previous battle and logged it as if it just happened.
         local moveId = emu:read16(ADDR_ENEMY_MOVES + moveIndex * 2)
         local species = emu:read16(ADDR_ENEMY_ACTIVE + 0x00)
-        emitBattleLog(1, string.format(
-            '{"type":"battle_log","battler":1,"event":"move","moveId":%d,"speciesId":%d}',
-            moveId, species))
+        queueMoveLog(1, moveId, species)
     end
 end
 
@@ -699,7 +799,7 @@ local heartbeatCounter = 0
 -- 1's entries are held back until Player 2 has committed their own choice for the turn, so
 -- Player 2 can't see Player 1's move before answering.
 local lastCommState = { [0] = 0, [1] = 0 }
-local lastPartyIndex = { [0] = -1, [1] = -1 }
+local lastBattlerPersonality = { [0] = -1, [1] = -1 }
 
 flushPendingPlayerLogEntries = function()
     for _, jsonLine in ipairs(pendingPlayerLogEntries) do
@@ -713,9 +813,7 @@ local function logMove(battler)
     if moveId == 0 then return end
     local base = (battler == 0) and ADDR_PLAYER_ACTIVE or ADDR_ENEMY_ACTIVE
     local species = emu:read16(base + 0x00)
-    emitBattleLog(battler, string.format(
-        '{"type":"battle_log","battler":%d,"event":"move","moveId":%d,"speciesId":%d}',
-        battler, moveId, species))
+    queueMoveLog(battler, moveId, species)
 end
 
 -- Player 1's moves are detected here (we don't control their input, only observe it). Player
@@ -732,23 +830,43 @@ local function checkBattleLog()
             if action == B_ACTION_USE_MOVE then
                 logMove(battler)
             end
-            -- Switches aren't logged here -- caught below via the party-index check instead,
+            -- Switches aren't logged here -- caught below via the species-change check instead,
             -- which also covers forced switches after a faint.
         end
         lastCommState[battler] = commState
     end
 
+    -- Switches are detected via gBattleMons's personality actually changing
     for battler = 0, 1 do
-        local partyIndex = emu:read16(ADDR_BATTLER_PARTY_INDEX_0 + battler * 2)
-        if partyIndex ~= lastPartyIndex[battler] then
-            local wasFirstRead = lastPartyIndex[battler] == -1
-            lastPartyIndex[battler] = partyIndex
-            if not wasFirstRead then
-                local base = (battler == 0) and ADDR_PLAYER_ACTIVE or ADDR_ENEMY_ACTIVE
-                local species = emu:read16(base + 0x00)
+        local base = (battler == 0) and ADDR_PLAYER_ACTIVE or ADDR_ENEMY_ACTIVE
+        local species = emu:read16(base + 0x00)
+        local personality = emu:read32(base + 0x48)
+        local hp = emu:read16(base + 0x28)
+
+        if personality ~= lastBattlerPersonality[battler] then
+            local wasFirstRead = lastBattlerPersonality[battler] == -1
+            lastBattlerPersonality[battler] = personality
+            -- The switched-in mon's full HP must not be misread next frame as "took damage" --
+            -- reset this battler's HP baseline too.
+            lastMoveLogHp[battler] = hp
+            if not wasFirstRead and species ~= 0 then
                 emitBattleLog(battler, string.format(
                     '{"type":"battle_log","battler":%d,"event":"switch","speciesId":%d}',
                     battler, species))
+            end
+        elseif hp ~= lastMoveLogHp[battler] then
+            local previousHp = lastMoveLogHp[battler]
+            local wasFirstRead = previousHp == -1
+            lastMoveLogHp[battler] = hp
+            if not wasFirstRead then
+                local opponent = (battler == 0) and 1 or 0
+                -- Usually positive (damage taken). Can be negative if `battler` is actually the
+                -- attacker healing itself via a draining move rather than the target -- see
+                -- flushMoveLog()'s comment on how that's displayed.
+                flushMoveLog(opponent, previousHp - hp)
+                if hp == 0 then
+                    discardMoveLog(battler)
+                end
             end
         end
     end
@@ -762,7 +880,9 @@ local function resetBattleLog()
         [0] = emu:read8(ADDR_BATTLE_COMMUNICATION_0),
         [1] = emu:read8(ADDR_BATTLE_COMMUNICATION_1),
     }
-    lastPartyIndex = { [0] = -1, [1] = -1 }
+    lastBattlerPersonality = { [0] = -1, [1] = -1 }
+    pendingMoveLog = { [0] = nil, [1] = nil }
+    lastMoveLogHp = { [0] = -1, [1] = -1 }
     player2Committed = false
     pendingPlayerLogEntries = {}
     awaitingReplacement = false

@@ -18,7 +18,26 @@
 	} = $props();
 
 	const speciesName = (id: number) => SPECIES_NAMES[id] ?? `Species #${id}`;
+	const displayName = $derived(
+		mon.nickname && mon.nickname.trim() !== '' ? mon.nickname : speciesName(mon.species)
+	);
+	const showSpeciesSubtitle = $derived(
+		displayName.toUpperCase() !== speciesName(mon.species).toUpperCase()
+	);
 	const types = $derived(SPECIES_TYPES[mon.species] ?? ['Normal']);
+	const statusColor = $derived(
+		mon.status === 'poisoned' || mon.status === 'badly poisoned'
+			? 'bg-purple-600'
+			: mon.status === 'burned'
+				? 'bg-orange-600'
+				: mon.status === 'paralyzed'
+					? 'bg-amber-500'
+					: mon.status === 'asleep'
+						? 'bg-slate-500'
+						: mon.status === 'frozen'
+							? 'bg-cyan-500'
+							: 'bg-slate-600'
+	);
 	const pct = $derived(mon.maxHp ? Math.round((mon.hp / mon.maxHp) * 100) : 0);
 
 	const hpBarClass = $derived(
@@ -74,12 +93,22 @@
 			<div>
 				<div class="flex items-baseline space-x-2">
 					<h3 class="text-2xl font-extrabold tracking-tight text-white">
-						{speciesName(mon.species)}
+						{displayName}
 					</h3>
 					<span class="text-sm font-semibold text-slate-400">
 						Lv. {mon.level}
 					</span>
 				</div>
+				{#if showSpeciesSubtitle}
+					<span class="text-xs font-medium text-slate-500">{speciesName(mon.species)}</span>
+				{/if}
+				{#if mon.status}
+					<span
+						class="mt-1 inline-block rounded-md px-2 py-0.5 text-xs font-bold tracking-wide text-white uppercase shadow-sm {statusColor}"
+					>
+						{mon.status}
+					</span>
+				{/if}
 			</div>
 
 			<div class="space-y-1">

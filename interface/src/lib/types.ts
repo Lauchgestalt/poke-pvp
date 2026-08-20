@@ -3,6 +3,8 @@ export interface ActiveMon {
 	hp: number;
 	maxHp: number;
 	level: number;
+	nickname: string;
+	status?: string | null;
 }
 
 export interface PartyMon extends ActiveMon {
@@ -34,7 +36,15 @@ export interface PlayerInfo {
 }
 
 export type BattleLog =
-	| { type: 'battle_log'; battler: 0 | 1; event: 'move'; moveId: number; speciesId: number }
+	| {
+			type: 'battle_log';
+			battler: 0 | 1;
+			event: 'move';
+			moveId: number;
+			speciesId: number;
+			damage?: number;
+			missed?: boolean;
+	  }
 	| { type: 'battle_log'; battler: 0 | 1; event: 'switch'; speciesId: number };
 
 export type ActionChoice =
