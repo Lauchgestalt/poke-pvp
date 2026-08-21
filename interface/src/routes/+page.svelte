@@ -4,10 +4,12 @@
 	import { streamSettings } from '$lib/streamSettings.svelte';
 	import { MOVE_NAMES } from '$lib/data/moveNames';
 	import { MOVE_TYPES } from '$lib/data/moveTypes';
+	import { ITEM_NAMES } from '$lib/data/itemNames';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Header from '$lib/components/Header.svelte';
 	import MonCard from '$lib/components/MonCard.svelte';
 	import MoveButton from '$lib/components/MoveButton.svelte';
+	import ItemButton from '$lib/components/ItemButton.svelte';
 	import PartySwitchList from '$lib/components/PartySwitchList.svelte';
 	import BattleLog from '$lib/components/BattleLog.svelte';
 	import ScreenPreview from '$lib/components/ScreenPreview.svelte';
@@ -89,6 +91,24 @@
 								/>
 							{/each}
 						</div>
+
+						{#if state.availableItems.length > 0}
+							<div class="mx-auto mb-6 grid max-w-4xl grid-cols-1 gap-3 sm:grid-cols-2">
+								<h2
+									class="col-span-2 mb-3 text-xs font-bold tracking-widest text-slate-500 uppercase"
+								>
+									Use an item
+								</h2>
+								{#each state.availableItems as { itemId, count } (itemId)}
+									<ItemButton
+										name={ITEM_NAMES[itemId] ?? `Item #${itemId}`}
+										{count}
+										disabled={battle.submitted || battle.role !== 'controller'}
+										onclick={() => battle.chooseItem(itemId)}
+									/>
+								{/each}
+							</div>
+						{/if}
 					{/if}
 
 					<div class="mx-auto mt-15 max-w-4xl">

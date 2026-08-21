@@ -139,6 +139,12 @@ class BattleConnection {
 		this.status = `sent switch to slot ${partySlot}, waiting for next turn...`;
 	}
 
+	chooseItem(itemId: number) {
+		this.send({ type: 'action_choice', action: 'item', itemId });
+		this.submitted = true;
+		this.status = `sent item choice, waiting for next turn...`;
+	}
+
 	setStreamEnabled(enabled: boolean) {
 		this.send({ type: 'set_stream_enabled', enabled });
 	}

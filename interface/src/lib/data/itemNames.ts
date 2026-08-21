@@ -1,0 +1,20 @@
+export const ITEM_NAMES: Record<number, string> = {
+	13: 'Potion',
+	14: 'Antidote',
+	15: 'Burn Heal',
+	16: 'Ice Heal',
+	17: 'Awakening',
+	18: 'Paralyze Heal',
+	19: 'Full Restore',
+	20: 'Max Potion',
+	21: 'Hyper Potion',
+	22: 'Super Potion',
+	23: 'Full Heal',
+	73: 'Guard Spec.',
+	74: 'Dire Hit',
+	75: 'X Attack',
+	76: 'X Defend',
+	77: 'X Speed',
+	78: 'X Accuracy',
+	79: 'X Special'
+};

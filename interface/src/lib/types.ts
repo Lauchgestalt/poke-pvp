@@ -20,6 +20,7 @@ export interface BattleState {
 	playerActive: ActiveMon;
 	enemyActivePartySlot: number;
 	enemyParty: PartyMon[];
+	availableItems: { itemId: number; count: number }[];
 }
 
 export interface BattleEnded {
@@ -49,7 +50,8 @@ export type BattleLog =
 
 export type ActionChoice =
 	| { type: 'action_choice'; action: 'move'; moveIndex: number }
-	| { type: 'action_choice'; action: 'switch'; partySlot: number };
+	| { type: 'action_choice'; action: 'switch'; partySlot: number }
+	| { type: 'action_choice'; action: 'item'; itemId: number };
 
 export interface SetPlayer2Name {
 	type: 'set_player2_name';

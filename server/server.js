@@ -145,6 +145,10 @@ function parseIncomingMessage(raw) {
         if (!Number.isInteger(msg.partySlot) || msg.partySlot < 0 || msg.partySlot > 5) return null;
         return msg;
       }
+      if (msg.action === 'item') {
+        if (!Number.isInteger(msg.itemId) || msg.itemId < 1 || msg.itemId > 999) return null;
+        return msg;
+      }
       return null;
     }
     case 'set_player2_name': {

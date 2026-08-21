@@ -30,6 +30,17 @@ local ADDR_HANDLE_TURN_ACTION_SELECTION = 0x0803BE74
 local ADDR_GBATTLE_BUFFER_B1 = 0x02023A64 -- gBattleBufferB[1], the enemy's buffer
 local ADDR_BATTLE_COMMUNICATION_1 = 0x02024333 -- gBattleCommunication[1] (enemy)
 
+-- gBattleStruct->chosenItem[0] / ->AI_itemType[0] / ->AI_itemFlags[0]. Found via live Memory
+-- Search (before/after diffing across a real item-use event) since gBattleStruct is heap-allocated
+-- and neither field has a discoverable fixed address in source. Confirmed live: writing item 13
+-- (Potion) + AI_ITEM_HEAL_HP here and forcing ShouldUseItem's return caused the trainer to
+-- genuinely use the Potion, with OpponentHandleChooseItem's response correctly echoing it back.
+-- Always index 0 here (not computed per-battler) since this project only ever controls the enemy
+-- trainer, whose (gActiveBattler / 2) * 2 offset is always 0 in a single (non-double) battle.
+local ADDR_CHOSEN_ITEM = 0x020000D0
+local ADDR_AI_ITEM_TYPE = 0x020000D4
+local ADDR_AI_ITEM_FLAGS = 0x020000D6
+
 -- gBattleMons[0]/[1] (struct BattlePokemon): the active player/enemy mon, already decrypted by
 -- the game. moves[4] u16 @ +0x0C, pp[4] u8 @ +0x24, species u16 @ +0x00, hp u16 @ +0x28,
 -- level u8 @ +0x2A, maxHp u16 @ +0x2C.
@@ -66,10 +77,75 @@ local RECONNECT_INTERVAL_FRAMES = 120 -- ~2s at 60fps
 local STATE_WAIT_ACTION_CASE_CHOSEN = 3
 local PLAYER_BATTLER_INDEX = 0
 local CONTROLLER_TWORETURNVALUES = 33
+local B_ACTION_USE_ITEM = 1
 local B_ACTION_EXEC_SCRIPT = 10
 local B_ACTION_SWITCH = 2
 local BATTLE_TYPE_TRAINER = 0x8
 local HEARTBEAT_INTERVAL_FRAMES = 30
+local MAX_TRAINER_ITEMS = 4
+local TRAINER_ITEMS_OFFSET = 0x10
+
+-- AI_ITEM_* / AI_HEAL_* / AI_X_* -- confirmed from pokeemerald's include/battle_ai_switch_items.h.
+local AI_ITEM_FULL_RESTORE = 1
+local AI_ITEM_HEAL_HP = 2
+local AI_ITEM_CURE_CONDITION = 3
+local AI_ITEM_X_STAT = 4
+local AI_ITEM_GUARD_SPEC = 5
+local AI_HEAL_CONFUSION = 0
+local AI_HEAL_PARALYSIS = 1
+local AI_HEAL_FREEZE = 2
+local AI_HEAL_BURN = 3
+local AI_HEAL_POISON = 4
+local AI_HEAL_SLEEP = 5
+local AI_X_ATTACK = 0
+local AI_X_DEFEND = 1
+local AI_X_SPEED = 2
+local AI_X_SPATK = 3
+local AI_X_ACCURACY = 5
+local AI_DIRE_HIT = 7
+
+-- Classifies every item a trainer could plausibly carry, matching pokeemerald's own
+-- GetAI_ItemType()/ShouldUseItem() classification (src/battle_ai_switch_items.c) -- since a
+-- player-driven choice bypasses that function's own logic entirely, this table (plus itemFlags,
+-- for the two categories that need to say exactly which condition/stat) has to reconstruct its
+-- conclusions by hand. Only the HEAL_HP path (Potion) has been live-verified end to end; the rest
+-- follow the same confirmed injection mechanism but haven't been tested against a real trainer.
+local ITEM_AI_CLASSIFICATION = {
+    [13] = { itemType = AI_ITEM_HEAL_HP }, -- Potion
+    [22] = { itemType = AI_ITEM_HEAL_HP }, -- Super Potion
+    [21] = { itemType = AI_ITEM_HEAL_HP }, -- Hyper Potion
+    [20] = { itemType = AI_ITEM_HEAL_HP }, -- Max Potion
+    [19] = { itemType = AI_ITEM_FULL_RESTORE }, -- Full Restore
+    [14] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_POISON }, -- Antidote
+    [15] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_BURN }, -- Burn Heal
+    [16] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_FREEZE }, -- Ice Heal
+    [17] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_SLEEP }, -- Awakening
+    [18] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_PARALYSIS }, -- Paralyze Heal
+    [23] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = (1 << AI_HEAL_CONFUSION) | (1 << AI_HEAL_PARALYSIS)
+        | (1 << AI_HEAL_FREEZE) | (1 << AI_HEAL_BURN) | (1 << AI_HEAL_POISON) | (1 << AI_HEAL_SLEEP) }, -- Full Heal
+    [73] = { itemType = AI_ITEM_GUARD_SPEC }, -- Guard Spec
+    [74] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_DIRE_HIT }, -- Dire Hit
+    [75] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_ATTACK }, -- X Attack
+    [76] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_DEFEND }, -- X Defend
+    [77] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_SPEED }, -- X Speed
+    [78] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_ACCURACY }, -- X Accuracy
+    [79] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_SPATK }, -- X Special
+}
+
+-- Reads the current opponent trainer's carried items straight from ROM (struct Trainer.items,
+-- confirmed live earlier this project). Returns up to 4 non-zero item IDs.
+local function readTrainerItems()
+    local trainerId = emu:read16(ADDR_TRAINER_BATTLE_OPPONENT_A)
+    local base = ADDR_GTRAINERS + trainerId * TRAINER_STRUCT_SIZE + TRAINER_ITEMS_OFFSET
+    local items = {}
+    for i = 0, MAX_TRAINER_ITEMS - 1 do
+        local item = emu:read16(base + i * 2)
+        if item ~= 0 then
+            items[#items + 1] = item
+        end
+    end
+    return items
+end
 
 -- Used only for the battle log (detecting what each battler just did), not for injection.
 local ADDR_CHOSEN_MOVE_BY_BATTLER = 0x02024274
@@ -193,7 +269,12 @@ local rxBuffer = ""
 -- browser -- capturing/encoding a frame ~24x/sec is real work worth skipping when nobody wants it.
 local streamEnabled = true
 -- pendingAction: nil, or {action="move", moveIndex=N}, or {action="switch", partySlot=N}
+--             or {action="item", itemId=N}
 local pendingAction = nil
+-- How many of each item Player 2 has already used this battle -- gTrainers' item list is read
+-- straight from ROM (read-only), so it never reflects consumption on its own; this is subtracted
+-- from that raw count wherever items are offered/validated. Reset per battle, see resetBattleLog().
+local usedItemCounts = {}
 local awaitingAction = false
 local awaitingReplacement = false
 -- Player 2 only sees "waiting for your move" after Player 1's own menu has actually closed, so
@@ -219,6 +300,34 @@ local voluntarySwitchSlot = nil
 local player2Committed = false
 local pendingPlayerLogEntries = {}
 local flushPendingPlayerLogEntries -- defined later, forward-declared for use above its definition
+
+-- Remaining counts for every supported item the current trainer carries, after subtracting what
+-- Player 2 has already used this battle (see usedItemCounts). Items at 0 remaining are omitted.
+local function remainingItemCounts()
+    local counts = {}
+    local order = {}
+    for _, itemId in ipairs(readTrainerItems()) do
+        if ITEM_AI_CLASSIFICATION[itemId] then
+            if not counts[itemId] then
+                counts[itemId] = 0
+                order[#order + 1] = itemId
+            end
+            counts[itemId] = counts[itemId] + 1
+        end
+    end
+    for itemId, used in pairs(usedItemCounts) do
+        if counts[itemId] then
+            counts[itemId] = counts[itemId] - used
+        end
+    end
+    local result = {}
+    for _, itemId in ipairs(order) do
+        if counts[itemId] > 0 then
+            result[#result + 1] = { itemId = itemId, count = counts[itemId] }
+        end
+    end
+    return result
+end
 
 -- Move log entries are queued when chosen, then only actually sent once the target's HP proves
 -- the move executed
@@ -336,6 +445,23 @@ function handleMessage(line)
             console:log("[client] received action: switch to slot " .. partySlot)
         else
             console:log("[client] rejected out-of-range partySlot: " .. tostring(partySlot))
+        end
+    elseif action == "item" then
+        local itemId = tonumber(line:match('"itemId"%s*:%s*(%d+)'))
+        local hasRemaining = false
+        if itemId then
+            for _, entry in ipairs(remainingItemCounts()) do
+                if entry.itemId == itemId then
+                    hasRemaining = true
+                    break
+                end
+            end
+        end
+        if hasRemaining then
+            pendingAction = { action = "item", itemId = itemId }
+            console:log("[client] received action: item " .. itemId)
+        else
+            console:log("[client] rejected item choice (none remaining or unsupported): " .. tostring(itemId))
         end
     end
 end
@@ -587,6 +713,17 @@ local function jsonOptionalString(value)
     return '"' .. value .. '"'
 end
 
+-- Only items this project actually knows how to inject (see ITEM_AI_CLASSIFICATION) are offered
+-- to Player 2, even if the trainer happens to carry something else too. Grouped by item ID with a
+-- count -- a trainer carrying two Potions in separate slots should show "Potion" once, with count 2.
+local function buildAvailableItemsJSON()
+    local parts = {}
+    for _, entry in ipairs(remainingItemCounts()) do
+        parts[#parts + 1] = string.format('{"itemId":%d,"count":%d}', entry.itemId, entry.count)
+    end
+    return "[" .. table.concat(parts, ",") .. "]"
+end
+
 local function extractEnemyState(msgType, mustSwitch)
     local moveIds = {}
     local pp = {}
@@ -605,13 +742,15 @@ local function extractEnemyState(msgType, mustSwitch)
         .. '"enemyActive":{"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","status":%s},'
         .. '"playerActive":{"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","status":%s},'
         .. '"enemyActivePartySlot":%d,'
-        .. '"enemyParty":%s}',
+        .. '"enemyParty":%s,'
+        .. '"availableItems":%s}',
         msgType, mustSwitch and "true" or "false",
         moveIds[1], moveIds[2], moveIds[3], moveIds[4], pp[1], pp[2], pp[3], pp[4],
         eSpecies, eHp, eMaxHp, eLevel, eNickname, jsonOptionalString(decodeStatus1(eStatus1)),
         pSpecies, pHp, pMaxHp, pLevel, pNickname, jsonOptionalString(decodeStatus1(pStatus1)),
         activePartySlot,
-        buildPartyJSON(ADDR_GENEMY_PARTY))
+        buildPartyJSON(ADDR_GENEMY_PARTY),
+        buildAvailableItemsJSON())
 end
 
 -- Holds the enemy trainer's action-type decision (fight/switch/item) until Player 2 answers.
@@ -750,14 +889,39 @@ local function onGetMostSuitableMon()
     flushPendingPlayerLogEntries()
 end
 
--- Item usage isn't supported yet -- always deny so the AI can't act on its own while we're
--- already controlling its move/switch decision.
+-- Injects Player 2's chosen item once the AI's own decision point is reached, mirroring
+-- ShouldUseItem()'s own "use item" side effects (see ITEM_AI_CLASSIFICATION above for why we
+-- can't just let the real function decide). Denies (same as before item support existed) whenever
+-- Player 2 chose a move or switch instead, so the AI can't sneak in an item use of its own.
 local function onShouldUseItem()
     if not steeringArmed then return end
+
+    if pendingAction and pendingAction.action == "item" and pendingAction.itemId then
+        local classification = ITEM_AI_CLASSIFICATION[pendingAction.itemId]
+        if classification then
+            emu:write8(ADDR_CHOSEN_ITEM, pendingAction.itemId)
+            emu:write8(ADDR_AI_ITEM_TYPE, classification.itemType)
+            emu:write8(ADDR_AI_ITEM_FLAGS, classification.itemFlags or 0)
+            emu:write8(ADDR_GBATTLE_BUFFER_B1, CONTROLLER_TWORETURNVALUES)
+            emu:write8(ADDR_GBATTLE_BUFFER_B1 + 1, B_ACTION_USE_ITEM)
+            emu:writeRegister("r0", 1)
+            local lr = emu:readRegister("lr")
+            emu:writeRegister("pc", lr)
+
+            console:log("[client] injected item " .. pendingAction.itemId)
+            usedItemCounts[pendingAction.itemId] = (usedItemCounts[pendingAction.itemId] or 0) + 1
+            pendingAction = nil
+            steeringArmed = false
+            player2Committed = true
+            flushPendingPlayerLogEntries()
+            return
+        end
+        console:error("[client] no AI classification for item " .. pendingAction.itemId .. " -- denying")
+    end
+
     emu:writeRegister("r0", 0)
     local lr = emu:readRegister("lr")
     emu:writeRegister("pc", lr)
-    steeringArmed = false
 end
 
 -- Injects Player 2's already-decided move once the game reaches the point where it expects one.
@@ -887,6 +1051,7 @@ local function resetBattleLog()
     pendingPlayerLogEntries = {}
     awaitingReplacement = false
     voluntarySwitchSlot = nil
+    usedItemCounts = {}
 end
 
 local reconnectCounter = 0

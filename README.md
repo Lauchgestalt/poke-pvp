@@ -4,7 +4,7 @@
 
 **Real-time remote PvP engine for single-player Pokémon Emerald.**
 
-Player 1 plays locally in the mGBA emulator. Player 2 connects via a modern web interface to control opposing trainers (moves, switches, ~~items~~) in real time, replacing the default game AI.
+Player 1 plays locally in the mGBA emulator. Player 2 connects via a modern web interface to control opposing trainers (moves, switches, items) in real time, replacing the default game AI.
 
 <p align="center">
   <a href="https://mgba.io/downloads.html"><img src="https://img.shields.io/badge/Emulator-mGBA_Nightly-6b5ce7?style=flat-square&logo=retroarch&logoColor=white" alt="mGBA Nightly"></a>
@@ -76,9 +76,11 @@ Player 2 interacts with a web dashboard to select moves or switches, which are i
 
 ## Roadmap
 
+<!-- | **Item Usage** | ![research](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/Repository.svg) Research | In-battle item usage (e.g., Potions, battle items) by Player 2 is currently disabled pending further reverse-engineering of item execution memory offsets. | -->
 | Feature | Status | Description
 | --- | --- | --- |
-| **Item Usage** | ![research](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/Repository.svg) Research | In-battle item usage (e.g., Potions, battle items) by Player 2 is currently disabled pending further reverse-engineering of item execution memory offsets. |
+| **Item Usage** | ![done](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChanges.svg) Done | ~~In-battle item usage (e.g., Potions, battle items) by Player 2 is currently disabled pending further reverse-engineering of item execution memory offsets.~~ |
+| **Double Battles** | ![research](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/Repository.svg) Research | The script currently only supports single-battle scenarios. Doubles do not crash the script, but the correct behavior is not yet implemented. |
 | **Support for more editions** | ![planned](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueDrafted.svg) Planned | Currently, only Pokémon Emerald (US) is supported. Future work may include support for other Pokémon editions, after reverse-engineering their respective memory layouts. |
 | **Improved Battle UI** | ![planned](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueDrafted.svg) Planned | Enhancements to the web dashboard, getting the browser experience closer to the actual game. |
 | **Hosted Relay Service** | ![planned](https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueDrafted.svg) Planned | A public relay service that allows players to connect without needing to host their own relay server. |
