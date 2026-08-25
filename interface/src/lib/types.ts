@@ -5,10 +5,13 @@ export interface ActiveMon {
 	level: number;
 	nickname: string;
 	status?: string | null;
+	gender?: 'male' | 'female' | null;
 }
 
 export interface PartyMon extends ActiveMon {
 	partySlot: number;
+	moveIds: number[];
+	pp: number[];
 }
 
 export interface BattleState {
@@ -50,7 +53,8 @@ export type BattleLog =
 			damage?: number;
 			missed?: boolean;
 	  }
-	| { type: 'battle_log'; battler: Battler; event: 'switch'; speciesId: number };
+	| { type: 'battle_log'; battler: Battler; event: 'switch'; speciesId: number }
+	| { type: 'battle_log'; battler: Battler | null; event: 'text'; text: string };
 
 export type ActionChoice =
 	| {

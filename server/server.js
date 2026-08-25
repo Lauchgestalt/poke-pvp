@@ -243,3 +243,25 @@ httpServer.listen(WEB_PORT, WEB_BIND_HOST, () => {
   console.log(`[relay] serving the interface + websocket + screenshot on http://${WEB_BIND_HOST}:${WEB_PORT}`);
   console.log(`[relay] controller token: ${CONTROLLER_TOKEN} (share this with Player 2, not spectators)`);
 });
+
+// Lets the token be redisplayed on demand instead of scrolling back through however much console
+// history has piled up over a long session. Only wired up when actually attached to a terminal --
+// raw mode doesn't make sense (and would error) when run non-interactively, e.g. under a process
+// manager with output redirected to a log file.
+if (process.stdin.isTTY) {
+  const CTRL_C = String.fromCharCode(3);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding('utf8');
+  console.log('[relay] press "t" at any time to redisplay the controller token');
+  process.stdin.on('data', (key) => {
+    if (key === CTRL_C) {
+      // Raw mode intercepts Ctrl+C from the terminal's own SIGINT handling, so it has to be
+      // handled explicitly or the process becomes impossible to stop this way.
+      process.exit();
+    }
+    if (key === 't' || key === 'T') {
+      console.log(`[relay] controller token: ${CONTROLLER_TOKEN} (share this with Player 2, not spectators)`);
+    }
+  });
+}

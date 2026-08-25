@@ -20,12 +20,16 @@
 	let activeTab = $state<'battle' | 'stream'>(streamSettings.enabled ? 'stream' : 'battle');
 	let wasInBattle = false;
 
+	let targetFirstMode = $state(false);
 	let target1 = $state<0 | 2>(0);
 	let target3 = $state<0 | 2>(0);
+	let pendingMove1 = $state<number | null>(null);
+	let pendingMove3 = $state<number | null>(null);
 
 	let switchTab = $state<1 | 3>(1);
 
 	const speciesName = (id: number) => SPECIES_NAMES[id] ?? `Species #${id}`;
+	const moveName = (id: number) => MOVE_NAMES[id] ?? `Move #${id}`;
 
 	$effect(() => {
 		const inBattle = battle.battleState !== null;
@@ -75,12 +79,51 @@
 	</div>
 {/snippet}
 
+{#snippet targetConfirm(
+	name: string,
+	mon: ActiveMon,
+	mon2: ActiveMon,
+	onSelect: (t: 0 | 2) => void,
+	onCancel: () => void
+)}
+	<div class="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4">
+		<div class="mb-3 text-center text-sm font-bold text-emerald-300">{name} -- choose a target</div>
+		<div class="flex gap-2">
+			{#each [mon, mon2] as m, i (i)}
+				{@const t = i === 0 ? 0 : 2}
+				<button
+					type="button"
+					class="flex flex-1 cursor-pointer items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-2 py-1.5 text-left transition-colors hover:border-emerald-500/60 hover:bg-emerald-950/40"
+					onclick={() => onSelect(t)}
+				>
+					<PokemonSprite
+						species={m.species}
+						alt={speciesName(m.species)}
+						class="h-8 w-8 shrink-0"
+					/>
+					<span class="min-w-0 flex-1 font-mono text-xs">
+						<span class="block truncate font-bold text-white">{speciesName(m.species)}</span>
+						<span class="text-slate-500">{m.hp}/{m.maxHp}</span>
+					</span>
+				</button>
+			{/each}
+		</div>
+		<button
+			type="button"
+			class="mt-3 w-full cursor-pointer rounded-lg border border-slate-800 bg-slate-950/60 py-1.5 text-center text-xs font-bold text-slate-400 transition-colors hover:border-slate-700"
+			onclick={onCancel}
+		>
+			Cancel
+		</button>
+	</div>
+{/snippet}
+
 {#snippet actionGrid(
 	state: BattleState,
 	battlerSlot: 1 | 3,
 	submitted: boolean,
-	target: 0 | 2 | undefined,
-	locked: boolean
+	locked: boolean,
+	onMoveClick: (i: number) => void
 )}
 	{#if locked}
 		<div class="mb-2 text-center text-xs text-slate-500">
@@ -101,11 +144,11 @@
 				{@const hasMove = Boolean(moveId && moveId > 0)}
 
 				<MoveButton
-					name={hasMove ? (MOVE_NAMES[moveId] ?? `Move #${moveId}`) : undefined}
+					name={hasMove ? moveName(moveId) : undefined}
 					type={hasMove ? (MOVE_TYPES[moveId] ?? 'Normal') : undefined}
 					{pp}
 					disabled={!hasMove || pp <= 0 || submitted || locked || battle.role !== 'controller'}
-					onclick={() => battle.chooseMove(i, battlerSlot, target)}
+					onclick={() => onMoveClick(i)}
 				/>
 			{/each}
 		</div>
@@ -139,6 +182,12 @@
 					{@const state = battle.battleState}
 					{#if state.playerActive2}
 						{@const playerActive2 = state.playerActive2}
+						<div class="mx-auto mb-3 flex max-w-5xl items-center justify-end gap-2">
+							<label class="flex cursor-pointer items-center gap-2 text-xs text-slate-400">
+								<input type="checkbox" bind:checked={targetFirstMode} class="accent-emerald-500" />
+								Pick target before move
+							</label>
+						</div>
 						<div class="mx-auto mb-6 grid max-w-5xl grid-cols-1 gap-4 sm:grid-cols-2">
 							<MonCard
 								label={battle.playerName ?? 'Player 1'}
@@ -163,13 +212,37 @@
 									playerId="2"
 								/>
 								<div class="mt-3">
-									{@render targetPicker(
-										state.playerActive,
-										playerActive2,
-										target1,
-										(t) => (target1 = t)
-									)}
-									{@render actionGrid(state, 1, battle.submitted, target1, false)}
+									{#if targetFirstMode}
+										{@render targetPicker(
+											state.playerActive,
+											playerActive2,
+											target1,
+											(t) => (target1 = t)
+										)}
+										{@render actionGrid(state, 1, battle.submitted, false, (i) =>
+											battle.chooseMove(i, 1, target1)
+										)}
+									{:else if pendingMove1 !== null}
+										{@const moveId = state.enemyMoveIds[pendingMove1]}
+										{@render targetConfirm(
+											moveName(moveId),
+											state.playerActive,
+											playerActive2,
+											(t) => {
+												battle.chooseMove(pendingMove1 as number, 1, t);
+												pendingMove1 = null;
+											},
+											() => (pendingMove1 = null)
+										)}
+									{:else}
+										{@render actionGrid(
+											state,
+											1,
+											battle.submitted,
+											false,
+											(i) => (pendingMove1 = i)
+										)}
+									{/if}
 								</div>
 							</div>
 							{#if battle.battleState3}
@@ -182,13 +255,37 @@
 										playerId="2"
 									/>
 									<div class="mt-3">
-										{@render targetPicker(
-											state3.playerActive,
-											state3.playerActive2 ?? state3.playerActive,
-											target3,
-											(t) => (target3 = t)
-										)}
-										{@render actionGrid(state3, 3, battle.submitted3, target3, !battle.submitted)}
+										{#if targetFirstMode}
+											{@render targetPicker(
+												state3.playerActive,
+												state3.playerActive2 ?? state3.playerActive,
+												target3,
+												(t) => (target3 = t)
+											)}
+											{@render actionGrid(state3, 3, battle.submitted3, !battle.submitted, (i) =>
+												battle.chooseMove(i, 3, target3)
+											)}
+										{:else if pendingMove3 !== null}
+											{@const moveId = state3.enemyMoveIds[pendingMove3]}
+											{@render targetConfirm(
+												moveName(moveId),
+												state3.playerActive,
+												state3.playerActive2 ?? state3.playerActive,
+												(t) => {
+													battle.chooseMove(pendingMove3 as number, 3, t);
+													pendingMove3 = null;
+												},
+												() => (pendingMove3 = null)
+											)}
+										{:else}
+											{@render actionGrid(
+												state3,
+												3,
+												battle.submitted3,
+												!battle.submitted,
+												(i) => (pendingMove3 = i)
+											)}
+										{/if}
 									</div>
 								</div>
 							{/if}
@@ -210,7 +307,9 @@
 						</div>
 
 						<div class="mx-auto max-w-4xl">
-							{@render actionGrid(state, 1, battle.submitted, undefined, false)}
+							{@render actionGrid(state, 1, battle.submitted, false, (i) =>
+								battle.chooseMove(i, 1)
+							)}
 						</div>
 					{/if}
 

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { SPECIES_NAMES } from '$lib/data/speciesNames';
+	import { MOVE_NAMES } from '$lib/data/moveNames';
 	import PokemonSprite from './PokemonSprite.svelte';
 	import type { PartyMon } from '$lib/types';
 
@@ -18,6 +19,11 @@
 	const speciesName = (id: number) => SPECIES_NAMES[id] ?? `Species #${id}`;
 	const displayName = (mon: PartyMon) =>
 		mon.nickname && mon.nickname.trim() !== '' ? mon.nickname : speciesName(mon.species);
+	const moveTitle = (mon: PartyMon) =>
+		mon.moveIds
+			.map((id, i) => (id > 0 ? `${MOVE_NAMES[id] ?? `Move #${id}`} (${mon.pp[i]} PP)` : null))
+			.filter(Boolean)
+			.join('\n') || 'No moves known';
 </script>
 
 <div
@@ -50,6 +56,7 @@
 							: 'border-slate-800/90 bg-slate-950/60 hover:border-slate-700 hover:bg-slate-800/50'}"
 					disabled={disabled || isActive || fainted}
 					onclick={() => onSwitch(mon.partySlot)}
+					title={moveTitle(mon)}
 				>
 					<div
 						class="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/80"
@@ -63,8 +70,15 @@
 
 					<div class="min-w-0 flex-1">
 						<div class="flex items-center justify-between gap-1.5">
-							<span class="truncate text-sm font-extrabold tracking-tight text-white">
-								{displayName(mon)}
+							<span class="flex min-w-0 items-baseline gap-1">
+								<span class="truncate text-sm font-extrabold tracking-tight text-white">
+									{displayName(mon)}
+								</span>
+								{#if mon.gender === 'male'}
+									<span class="text-xs font-bold text-blue-400">♂</span>
+								{:else if mon.gender === 'female'}
+									<span class="text-xs font-bold text-pink-400">♀</span>
+								{/if}
 							</span>
 
 							{#if isActive}

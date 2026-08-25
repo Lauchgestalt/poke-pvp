@@ -10,6 +10,11 @@
 		disabled?: boolean;
 		onclick?: () => void;
 	} = $props();
+
+	function convertNameToImageUrl(name: string): string {
+		let formattedName = name.toLowerCase().replace(/ /g, '-');
+		return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/${formattedName}.png`;
+	}
 </script>
 
 <button
@@ -20,7 +25,7 @@
 	<div class="flex min-w-0 items-center gap-3">
 		<span>
 			<img
-				src="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/{name.toLowerCase()}.png"
+				src={convertNameToImageUrl(name)}
 				alt={name}
 				class="h-8 w-8 rounded-md border border-slate-800/80 bg-slate-900/80 object-contain"
 			/>

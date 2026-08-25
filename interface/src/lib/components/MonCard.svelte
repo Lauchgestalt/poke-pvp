@@ -27,16 +27,18 @@
 	const types = $derived(SPECIES_TYPES[mon.species] ?? ['Normal']);
 	const statusColor = $derived(
 		mon.status === 'poisoned' || mon.status === 'badly poisoned'
-			? 'bg-purple-600'
+			? 'bg-purple-700'
 			: mon.status === 'burned'
-				? 'bg-orange-600'
+				? 'bg-orange-700'
 				: mon.status === 'paralyzed'
-					? 'bg-amber-500'
+					? 'bg-amber-700'
 					: mon.status === 'asleep'
-						? 'bg-slate-500'
+						? 'bg-slate-700'
 						: mon.status === 'frozen'
-							? 'bg-cyan-500'
-							: 'bg-slate-600'
+							? 'bg-cyan-700'
+							: mon.status === 'confused'
+								? 'bg-pink-700'
+								: 'bg-slate-700'
 	);
 	const pct = $derived(mon.maxHp ? Math.round((mon.hp / mon.maxHp) * 100) : 0);
 
@@ -95,6 +97,11 @@
 					<h3 class="text-2xl font-extrabold tracking-tight text-white">
 						{displayName}
 					</h3>
+					{#if mon.gender === 'male'}
+						<span class="text-lg font-bold text-blue-400">♂</span>
+					{:else if mon.gender === 'female'}
+						<span class="text-lg font-bold text-pink-400">♀</span>
+					{/if}
 					<span class="text-sm font-semibold text-slate-400">
 						Lv. {mon.level}
 					</span>

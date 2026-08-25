@@ -194,10 +194,20 @@ class BattleConnection {
 		this.log = [...this.log, entry].slice(-MAX_LOG_ENTRIES);
 	}
 
-	private formatLogEntry(msg: BattleLog): string {
-		const isPlayerOne = msg.battler === 0 || msg.battler === 2;
+	private nameForBattler(battler: 0 | 1 | 2 | 3 | null): string | null {
+		if (battler === null) return null;
+		const isPlayerOne = battler === 0 || battler === 2;
 		const baseName = isPlayerOne ? (this.playerName ?? 'Player 1') : (this.myName ?? 'Player 2');
-		const who = msg.battler === 2 || msg.battler === 3 ? `${baseName} (right)` : baseName;
+		return battler === 2 || battler === 3 ? `${baseName} (right)` : baseName;
+	}
+
+	private formatLogEntry(msg: BattleLog): string {
+		if (msg.event === 'text') {
+			const who = this.nameForBattler(msg.battler);
+			return who ? `${who}: ${msg.text}` : msg.text;
+		}
+
+		const who = this.nameForBattler(msg.battler) ?? 'Unknown';
 		const species = SPECIES_NAMES[msg.speciesId] ?? `Species #${msg.speciesId}`;
 		if (msg.event === 'move') {
 			const name = MOVE_NAMES[msg.moveId] ?? `Move #${msg.moveId}`;

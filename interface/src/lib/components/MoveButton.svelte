@@ -32,6 +32,7 @@
 		class="group relative flex h-14.5 w-full cursor-pointer items-center justify-between rounded-xl border border-slate-800/80 bg-slate-950 px-4 transition-all duration-150 hover:enabled:border-cyan-400 hover:enabled:bg-slate-900 active:enabled:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
 		{disabled}
 		{onclick}
+		title={name}
 	>
 		<div class="flex min-w-0 items-center gap-3">
 			{#if type}

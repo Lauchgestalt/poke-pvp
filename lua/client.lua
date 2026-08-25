@@ -21,6 +21,29 @@ local TRAINER_NAME_OFFSET = 0x04
 local TRAINER_NAME_MAX_CHARS = 11
 local ADDR_TRAINER_BATTLE_OPPONENT_A = 0x02038BCA -- current opponent trainer's ID
 
+-- gSpeciesInfo: the ROM's per-species base stats table (struct SpeciesInfo, 0x1C bytes each),
+-- confirmed from pret/pokeemerald's source (genderRatio at struct offset 0x10) cross-referenced
+-- against Bulbapedia's documented address for this specific US release. Not yet independently
+-- live-verified -- confirm before trusting (e.g. read species #1 Bulbasaur's genderRatio and check
+-- it comes back as 31/0x1F, its real known ratio).
+local ADDR_GSPECIES_INFO = 0x083203E8
+local SPECIES_INFO_STRUCT_SIZE = 0x1C
+local GENDER_RATIO_OFFSET = 0x10
+local GENDER_RATIO_ALWAYS_FEMALE = 0xFE
+local GENDER_RATIO_GENDERLESS = 0xFF
+
+-- Gen 3's standard formula: genderless/always-male/always-female are special-cased sentinel
+-- values; otherwise the mon's own personality value (its low byte) rolled against the species'
+-- threshold decides. Returns "male", "female", or nil (genderless).
+local function computeGender(species, personality)
+    local genderRatio = emu:read8(ADDR_GSPECIES_INFO + species * SPECIES_INFO_STRUCT_SIZE + GENDER_RATIO_OFFSET)
+    if genderRatio == GENDER_RATIO_GENDERLESS then return nil end
+    if genderRatio == GENDER_RATIO_ALWAYS_FEMALE then return "female" end
+    if genderRatio == 0 then return "male" end
+    if (personality & 0xFF) < genderRatio then return "female" end
+    return "male"
+end
+
 local ADDR_OPPONENT_HANDLE_CHOOSE_ACTION = 0x08061F9C -- AI decides fight/switch/item
 local ADDR_OPPONENT_HANDLE_CHOOSE_POKEMON = 0x08062188 -- AI picks which mon to switch to
 local ADDR_SHOULD_SWITCH = 0x08063614
@@ -93,13 +116,60 @@ local NICKNAME_MAX_CHARS = 10
 -- Which of the 4 encrypted substructures (Growth/Attacks/EVs/Misc) holds Growth data, indexed by
 -- personality % 24. From Bulbapedia's Gen 3 substructure order table.
 local GROWTH_SLOT_BY_PID24 = {
-    [0] = 0, [1] = 0, [2] = 0, [3] = 0, [4] = 0, [5] = 0,
-    [6] = 1, [7] = 1,
-    [8] = 2, [9] = 3, [10] = 2, [11] = 3,
-    [12] = 1, [13] = 1,
-    [14] = 2, [15] = 3, [16] = 2, [17] = 3,
-    [18] = 1, [19] = 1,
-    [20] = 2, [21] = 3, [22] = 2, [23] = 3,
+    [0] = 0,
+    [1] = 0,
+    [2] = 0,
+    [3] = 0,
+    [4] = 0,
+    [5] = 0,
+    [6] = 1,
+    [7] = 1,
+    [8] = 2,
+    [9] = 3,
+    [10] = 2,
+    [11] = 3,
+    [12] = 1,
+    [13] = 1,
+    [14] = 2,
+    [15] = 3,
+    [16] = 2,
+    [17] = 3,
+    [18] = 1,
+    [19] = 1,
+    [20] = 2,
+    [21] = 3,
+    [22] = 2,
+    [23] = 3
+}
+
+-- Same idea, for the Attacks substructure (moves/PP) -- derived from the same 24-permutation
+-- table, cross-checked against GROWTH_SLOT_BY_PID24 above (both come from the identical ordering,
+-- just tracking a different letter's position each time).
+local ATTACKS_SLOT_BY_PID24 = {
+    [0] = 1,
+    [1] = 1,
+    [2] = 2,
+    [3] = 3,
+    [4] = 2,
+    [5] = 3,
+    [6] = 0,
+    [7] = 0,
+    [8] = 0,
+    [9] = 0,
+    [10] = 0,
+    [11] = 0,
+    [12] = 2,
+    [13] = 3,
+    [14] = 1,
+    [15] = 1,
+    [16] = 3,
+    [17] = 2,
+    [18] = 2,
+    [19] = 3,
+    [20] = 1,
+    [21] = 1,
+    [22] = 3,
+    [23] = 2
 }
 
 local RECONNECT_INTERVAL_FRAMES = 120 -- ~2s at 60fps
@@ -141,25 +211,73 @@ local AI_DIRE_HIT = 7
 -- conclusions by hand. Only the HEAL_HP path (Potion) has been live-verified end to end; the rest
 -- follow the same confirmed injection mechanism but haven't been tested against a real trainer.
 local ITEM_AI_CLASSIFICATION = {
-    [13] = { itemType = AI_ITEM_HEAL_HP }, -- Potion
-    [22] = { itemType = AI_ITEM_HEAL_HP }, -- Super Potion
-    [21] = { itemType = AI_ITEM_HEAL_HP }, -- Hyper Potion
-    [20] = { itemType = AI_ITEM_HEAL_HP }, -- Max Potion
-    [19] = { itemType = AI_ITEM_FULL_RESTORE }, -- Full Restore
-    [14] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_POISON }, -- Antidote
-    [15] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_BURN }, -- Burn Heal
-    [16] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_FREEZE }, -- Ice Heal
-    [17] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_SLEEP }, -- Awakening
-    [18] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = 1 << AI_HEAL_PARALYSIS }, -- Paralyze Heal
-    [23] = { itemType = AI_ITEM_CURE_CONDITION, itemFlags = (1 << AI_HEAL_CONFUSION) | (1 << AI_HEAL_PARALYSIS)
-        | (1 << AI_HEAL_FREEZE) | (1 << AI_HEAL_BURN) | (1 << AI_HEAL_POISON) | (1 << AI_HEAL_SLEEP) }, -- Full Heal
-    [73] = { itemType = AI_ITEM_GUARD_SPEC }, -- Guard Spec
-    [74] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_DIRE_HIT }, -- Dire Hit
-    [75] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_ATTACK }, -- X Attack
-    [76] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_DEFEND }, -- X Defend
-    [77] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_SPEED }, -- X Speed
-    [78] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_ACCURACY }, -- X Accuracy
-    [79] = { itemType = AI_ITEM_X_STAT, itemFlags = 1 << AI_X_SPATK }, -- X Special
+    [13] = {
+        itemType = AI_ITEM_HEAL_HP
+    }, -- Potion
+    [22] = {
+        itemType = AI_ITEM_HEAL_HP
+    }, -- Super Potion
+    [21] = {
+        itemType = AI_ITEM_HEAL_HP
+    }, -- Hyper Potion
+    [20] = {
+        itemType = AI_ITEM_HEAL_HP
+    }, -- Max Potion
+    [19] = {
+        itemType = AI_ITEM_FULL_RESTORE
+    }, -- Full Restore
+    [14] = {
+        itemType = AI_ITEM_CURE_CONDITION,
+        itemFlags = 1 << AI_HEAL_POISON
+    }, -- Antidote
+    [15] = {
+        itemType = AI_ITEM_CURE_CONDITION,
+        itemFlags = 1 << AI_HEAL_BURN
+    }, -- Burn Heal
+    [16] = {
+        itemType = AI_ITEM_CURE_CONDITION,
+        itemFlags = 1 << AI_HEAL_FREEZE
+    }, -- Ice Heal
+    [17] = {
+        itemType = AI_ITEM_CURE_CONDITION,
+        itemFlags = 1 << AI_HEAL_SLEEP
+    }, -- Awakening
+    [18] = {
+        itemType = AI_ITEM_CURE_CONDITION,
+        itemFlags = 1 << AI_HEAL_PARALYSIS
+    }, -- Paralyze Heal
+    [23] = {
+        itemType = AI_ITEM_CURE_CONDITION,
+        itemFlags = (1 << AI_HEAL_CONFUSION) | (1 << AI_HEAL_PARALYSIS) | (1 << AI_HEAL_FREEZE) | (1 << AI_HEAL_BURN) |
+            (1 << AI_HEAL_POISON) | (1 << AI_HEAL_SLEEP)
+    }, -- Full Heal
+    [73] = {
+        itemType = AI_ITEM_GUARD_SPEC
+    }, -- Guard Spec
+    [74] = {
+        itemType = AI_ITEM_X_STAT,
+        itemFlags = 1 << AI_DIRE_HIT
+    }, -- Dire Hit
+    [75] = {
+        itemType = AI_ITEM_X_STAT,
+        itemFlags = 1 << AI_X_ATTACK
+    }, -- X Attack
+    [76] = {
+        itemType = AI_ITEM_X_STAT,
+        itemFlags = 1 << AI_X_DEFEND
+    }, -- X Defend
+    [77] = {
+        itemType = AI_ITEM_X_STAT,
+        itemFlags = 1 << AI_X_SPEED
+    }, -- X Speed
+    [78] = {
+        itemType = AI_ITEM_X_STAT,
+        itemFlags = 1 << AI_X_ACCURACY
+    }, -- X Accuracy
+    [79] = {
+        itemType = AI_ITEM_X_STAT,
+        itemFlags = 1 << AI_X_SPATK
+    } -- X Special
 }
 
 -- Reads the current opponent trainer's carried items straight from ROM (struct Trainer.items,
@@ -190,8 +308,12 @@ local GEN3_STRING_TERMINATOR = 0xFF
 -- Gen 3 games don't use ASCII -- every string is its own custom byte encoding. These two tables
 -- convert between that encoding and normal Lua strings, covering letters, digits, space, and a
 -- handful of common punctuation marks (values from pret's charmap.txt).
-local GEN3_CHARMAP = { [0x00] = " " }
-local GEN3_ENCODE_MAP = { [" "] = 0x00 }
+local GEN3_CHARMAP = {
+    [0x00] = " "
+}
+local GEN3_ENCODE_MAP = {
+    [" "] = 0x00
+}
 do
     local digits = "0123456789"
     for i = 1, #digits do
@@ -211,7 +333,14 @@ do
         GEN3_CHARMAP[byte] = lower:sub(i, i)
         GEN3_ENCODE_MAP[lower:sub(i, i)] = byte
     end
-    local punctuation = { ["!"] = 0xAB, ["?"] = 0xAC, ["."] = 0xAD, ["-"] = 0xAE, [","] = 0xB8, ["'"] = 0xB4 }
+    local punctuation = {
+        ["!"] = 0xAB,
+        ["?"] = 0xAC,
+        ["."] = 0xAD,
+        ["-"] = 0xAE,
+        [","] = 0xB8,
+        ["'"] = 0xB4
+    }
     for char, byte in pairs(punctuation) do
         GEN3_CHARMAP[byte] = char
         GEN3_ENCODE_MAP[char] = byte
@@ -249,7 +378,6 @@ local function showBattleMessage(text)
     emu:writeRegister("r1", B_WIN_MSG)
     emu:writeRegister("pc", ADDR_BATTLE_PUT_TEXT_ON_WINDOW)
 end
-
 
 local function scriptDir()
     local source = debug.getinfo(1, "S").source
@@ -312,7 +440,9 @@ local pendingAction = {}
 -- subtracted from that raw count wherever items are offered/validated. Reset per battle, see
 -- resetBattleLog(). Battler 3 stays empty for now -- see ITEM_AI_CLASSIFICATION's usage, item
 -- support isn't extended to battler 3 yet (needs gTrainerBattleOpponent_B, not yet discovered).
-local usedItemCounts = { [1] = {} }
+local usedItemCounts = {
+    [1] = {}
+}
 local awaitingAction = {}
 local awaitingReplacement = {}
 -- Player 2 only sees "waiting for your move" after Player 1's own menu has actually closed, so
@@ -353,7 +483,9 @@ local allEnemyBattlersCommitted -- defined later (needs isDoubleBattle), forward
 -- ITEM_AI_CLASSIFICATION's usage; needs gTrainerBattleOpponent_B, not yet discovered), and
 -- readTrainerItems() only ever reads trainer A's items regardless of which battler is asking.
 local function remainingItemCounts(battler)
-    if battler ~= 1 then return {} end
+    if battler ~= 1 then
+        return {}
+    end
     local counts = {}
     local order = {}
     for _, itemId in ipairs(readTrainerItems()) do
@@ -373,7 +505,10 @@ local function remainingItemCounts(battler)
     local result = {}
     for _, itemId in ipairs(order) do
         if counts[itemId] > 0 then
-            result[#result + 1] = { itemId = itemId, count = counts[itemId] }
+            result[#result + 1] = {
+                itemId = itemId,
+                count = counts[itemId]
+            }
         end
     end
     return result
@@ -390,7 +525,9 @@ local lastMoveLogHp = {}
 local function disconnect(reason)
     if sock then
         console:log("[client] disconnected from relay: " .. tostring(reason))
-        pcall(function() sock:close() end)
+        pcall(function()
+            sock:close()
+        end)
     end
     sock = nil
     rxBuffer = ""
@@ -400,7 +537,9 @@ end
 local function connect()
     local newSock = socket.tcp()
     newSock:add("received", function()
-        if sock ~= newSock then return end
+        if sock ~= newSock then
+            return
+        end
         while true do
             local data, err = newSock:receive(4096)
             if data then
@@ -421,14 +560,18 @@ local function connect()
         end
     end)
     newSock:add("error", function(err)
-        if sock ~= newSock then return end
+        if sock ~= newSock then
+            return
+        end
         disconnect(err)
     end)
 
     local ok, err = newSock:connect(RELAY_HOST, RELAY_PORT)
     if not ok then
         console:log("[client] connect failed: " .. tostring(err))
-        pcall(function() newSock:close() end)
+        pcall(function()
+            newSock:close()
+        end)
         return
     end
     sock = newSock
@@ -436,8 +579,12 @@ local function connect()
 end
 
 local function sendJSON(jsonLine)
-    if not sock then return end
-    local ok, err = pcall(function() sock:send(jsonLine .. "\n") end)
+    if not sock then
+        return
+    end
+    local ok, err = pcall(function()
+        sock:send(jsonLine .. "\n")
+    end)
     if not ok then
         disconnect(err)
     end
@@ -500,8 +647,13 @@ function handleMessage(line)
             target = PLAYER_BATTLER_INDEX
         end
         if moveIndex and moveIndex >= 0 and moveIndex <= 3 then
-            pendingAction[battlerSlot] = { action = "move", moveIndex = moveIndex, target = target }
-            console:log("[client] received action: battler " .. battlerSlot .. " move " .. moveIndex .. " -> target " .. target)
+            pendingAction[battlerSlot] = {
+                action = "move",
+                moveIndex = moveIndex,
+                target = target
+            }
+            console:log("[client] received action: battler " .. battlerSlot .. " move " .. moveIndex .. " -> target " ..
+                            target)
         else
             console:log("[client] rejected out-of-range moveIndex: " .. tostring(moveIndex))
         end
@@ -519,7 +671,10 @@ function handleMessage(line)
             end
         end
         if partySlot and partySlot >= minSlot and partySlot <= maxSlot then
-            pendingAction[battlerSlot] = { action = "switch", partySlot = partySlot }
+            pendingAction[battlerSlot] = {
+                action = "switch",
+                partySlot = partySlot
+            }
             console:log("[client] received action: battler " .. battlerSlot .. " switch to slot " .. partySlot)
         else
             console:log("[client] rejected out-of-range partySlot: " .. tostring(partySlot))
@@ -536,7 +691,10 @@ function handleMessage(line)
             end
         end
         if hasRemaining then
-            pendingAction[battlerSlot] = { action = "item", itemId = itemId }
+            pendingAction[battlerSlot] = {
+                action = "item",
+                itemId = itemId
+            }
             console:log("[client] received action: battler " .. battlerSlot .. " item " .. itemId)
         else
             console:log("[client] rejected item choice (none remaining or unsupported): " .. tostring(itemId))
@@ -565,7 +723,11 @@ end
 -- a multi-hit move like Double Kick fires several separate HP changes for the SAME queued entry
 -- before it's finally flushed.
 local function queueMoveLog(battler, moveId, speciesId)
-    pendingMoveLog[battler] = { moveId = moveId, speciesId = speciesId, damage = nil }
+    pendingMoveLog[battler] = {
+        moveId = moveId,
+        speciesId = speciesId,
+        damage = nil
+    }
 end
 
 -- Adds one hit's worth of HP delta to attacker's still-queued entry, without sending anything yet
@@ -574,7 +736,9 @@ end
 -- the interface displays that as healing, not damage.
 local function accumulateMoveLogDamage(attacker, delta)
     local entry = pendingMoveLog[attacker]
-    if not entry then return end
+    if not entry then
+        return
+    end
     entry.damage = (entry.damage or 0) + delta
 end
 
@@ -585,15 +749,17 @@ end
 -- hits all land in the same log entry instead of only the first one being reported.
 local function flushMoveLog(attacker, missed)
     local entry = pendingMoveLog[attacker]
-    if not entry then return end
+    if not entry then
+        return
+    end
     pendingMoveLog[attacker] = nil
-    if isPlayerOneBattler(attacker) and not allEnemyBattlersCommitted() then return end
-    local extraField = missed and ',"missed":true'
-        or (entry.damage and string.format(',"damage":%d', entry.damage))
-        or ""
-    sendJSON(string.format(
-        '{"type":"battle_log","battler":%d,"event":"move","moveId":%d,"speciesId":%d%s}',
-        attacker, entry.moveId, entry.speciesId, extraField))
+    if isPlayerOneBattler(attacker) and not allEnemyBattlersCommitted() then
+        return
+    end
+    local extraField = missed and ',"missed":true' or (entry.damage and string.format(',"damage":%d', entry.damage)) or
+                           ""
+    sendJSON(string.format('{"type":"battle_log","battler":%d,"event":"move","moveId":%d,"speciesId":%d%s}', attacker,
+        entry.moveId, entry.speciesId, extraField))
 end
 
 -- Discards battler `battler`'s own still-queued entry
@@ -608,15 +774,21 @@ end
 -- Returns the GBA player's own trainer name, or nil if the save data isn't loaded yet.
 local function decodePlayerName()
     local saveBlock2 = emu:read32(ADDR_SAVE_BLOCK2_PTR)
-    if saveBlock2 == 0 then return nil end
+    if saveBlock2 == 0 then
+        return nil
+    end
     local chars = {}
     for i = 0, PLAYER_NAME_LENGTH - 1 do
         local byte = emu:read8(saveBlock2 + i)
-        if byte == GEN3_STRING_TERMINATOR then break end
+        if byte == GEN3_STRING_TERMINATOR then
+            break
+        end
         chars[#chars + 1] = GEN3_CHARMAP[byte] or "?"
     end
     local name = table.concat(chars)
-    if name == "" then return nil end
+    if name == "" then
+        return nil
+    end
     return name
 end
 
@@ -653,7 +825,9 @@ local function takeScreenshot()
 end
 
 local function sendPlayerNameIfNeeded()
-    if playerNameSent then return end
+    if playerNameSent then
+        return
+    end
     local name = decodePlayerName()
     if name then
         sendJSON('{"type":"player_info","name":"' .. name .. '"}')
@@ -666,13 +840,17 @@ end
 local BATTLE_TYPE_DOUBLE = 0x1
 
 local function isControllableBattle()
-    if not isInBattle() then return false end
+    if not isInBattle() then
+        return false
+    end
     local flags = emu:read32(ADDR_BATTLE_TYPE_FLAGS)
     return (flags & BATTLE_TYPE_TRAINER) ~= 0
 end
 
 isDoubleBattle = function()
-    if not isInBattle() then return false end
+    if not isInBattle() then
+        return false
+    end
     return (emu:read32(ADDR_BATTLE_TYPE_FLAGS) & BATTLE_TYPE_DOUBLE) ~= 0
 end
 
@@ -689,7 +867,9 @@ local function decodeGen3Bytes(addr, maxChars)
     local chars = {}
     for i = 0, maxChars - 1 do
         local byte = emu:read8(addr + i)
-        if byte == GEN3_STRING_TERMINATOR then break end
+        if byte == GEN3_STRING_TERMINATOR then
+            break
+        end
         chars[#chars + 1] = GEN3_CHARMAP[byte] or "?"
     end
     return table.concat(chars)
@@ -701,16 +881,25 @@ end
 local BATTLE_TEXT_SEARCH_WINDOW = 64 -- generous for a single printed line/message
 
 local function substitutePlayer1TrainerName(bufferAddr)
-    if player2Name == "Player 2" then return end -- no custom name set, nothing to do
+    if player2Name == "Player 2" then
+        return
+    end -- no custom name set, nothing to do
     local trainerId = emu:read16(ADDR_TRAINER_BATTLE_OPPONENT_A)
-    if trainerId == 0 then return end -- TRAINER_NONE
+    if trainerId == 0 then
+        return
+    end -- TRAINER_NONE
 
-    local realName = decodeGen3Bytes(ADDR_GTRAINERS + trainerId * TRAINER_STRUCT_SIZE + TRAINER_NAME_OFFSET, TRAINER_NAME_MAX_CHARS)
-    if realName == "" then return end
+    local realName = decodeGen3Bytes(ADDR_GTRAINERS + trainerId * TRAINER_STRUCT_SIZE + TRAINER_NAME_OFFSET,
+        TRAINER_NAME_MAX_CHARS)
+    if realName == "" then
+        return
+    end
 
     local haystack = decodeGen3Bytes(bufferAddr, BATTLE_TEXT_SEARCH_WINDOW)
     local matchStart = haystack:find(realName, 1, true)
-    if not matchStart then return end
+    if not matchStart then
+        return
+    end
 
     -- Replacement must be exactly realName's length so nothing after it in the buffer shifts.
     local replacement = player2Name:sub(1, #realName)
@@ -726,8 +915,50 @@ end
 -- (which carries no battler info by itself) can be attributed to the right one.
 local currentlyResolvingBattler = nil
 
+-- Battle text mentioning any of these gets forwarded to the browser as a battle-log "text" event
+-- verbatim, rather than trying to build a precise data model for every individual effect (stat
+-- stages, confusion, flinch, and the various status-condition messages all have several different
+-- phrasings each) -- the game's own text already says exactly what happened.
+local INTERESTING_TEXT_KEYWORDS = {
+    "rose!", "fell!", "won't go any higher", "won't go any lower",
+    "flinched", "confus", "fully paralyzed", "frozen solid",
+    "fast asleep", "woke up", "hurt by", "poisoned!", "burned!", "paralyzed!",
+}
+
+local function cleanBattleText(text)
+    local cleaned = text:gsub("?", " "):gsub("%s+", " ")
+    return cleaned:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function jsonEscapeString(text)
+    return (text:gsub('[\\"]', "\\%0"))
+end
+
+-- Attributed to currentlyResolvingBattler when known (held back like any other battler-0/2 entry
+-- until Player 2 has committed, via emitBattleLog); sent immediately, unattributed, otherwise --
+-- e.g. weather/residual damage messages that aren't narrating any particular battler's move.
+local function forwardInterestingBattleText(text)
+    for _, keyword in ipairs(INTERESTING_TEXT_KEYWORDS) do
+        if text:find(keyword, 1, true) then
+            local cleaned = cleanBattleText(text)
+            if currentlyResolvingBattler ~= nil then
+                emitBattleLog(currentlyResolvingBattler, string.format(
+                    '{"type":"battle_log","battler":%d,"event":"text","text":"%s"}',
+                    currentlyResolvingBattler, jsonEscapeString(cleaned)))
+            else
+                sendJSON(string.format(
+                    '{"type":"battle_log","battler":null,"event":"text","text":"%s"}',
+                    jsonEscapeString(cleaned)))
+            end
+            return
+        end
+    end
+end
+
 local function onBattlePutTextOnWindow()
-    if not isControllableBattle() then return end
+    if not isControllableBattle() then
+        return
+    end
     local ok, err = pcall(function()
         local textAddr = emu:readRegister("r0")
         local text = decodeGen3Bytes(textAddr, BATTLE_TEXT_SEARCH_WINDOW)
@@ -747,6 +978,7 @@ local function onBattlePutTextOnWindow()
             flushMoveLog(currentlyResolvingBattler, true)
             currentlyResolvingBattler = nil
         end
+        forwardInterestingBattleText(text)
         substitutePlayer1TrainerName(textAddr)
     end)
     if not ok then
@@ -760,15 +992,35 @@ local STATUS1_BURN = 0x10
 local STATUS1_FREEZE = 0x20
 local STATUS1_PARALYSIS = 0x40
 local STATUS1_TOXIC_POISON = 0x80
+-- Confusion lives in status2 (a separate field, offset 0x50 -- confirmed from source), not
+-- status1 -- a mon can be confused independently of (or alongside) a status1 condition. Same
+-- "nonzero turn counter" shape as the sleep mask.
+local STATUS2_CONFUSION_MASK = 0x07
 
--- Decodes gBattleMons[].status1 into a short label, or nil if healthy.
-local function decodeStatus1(status1)
-    if status1 & STATUS1_FREEZE ~= 0 then return "frozen" end
-    if status1 & STATUS1_TOXIC_POISON ~= 0 then return "badly poisoned" end
-    if status1 & STATUS1_POISON ~= 0 then return "poisoned" end
-    if status1 & STATUS1_BURN ~= 0 then return "burned" end
-    if status1 & STATUS1_PARALYSIS ~= 0 then return "paralyzed" end
-    if status1 & STATUS1_SLEEP_MASK ~= 0 then return "asleep" end
+-- Decodes gBattleMons[].status1/status2 into a short label, or nil if healthy. status1 (the
+-- "major" conditions) takes priority for display when a mon happens to have both.
+local function decodeStatus(status1, status2)
+    if status1 & STATUS1_FREEZE ~= 0 then
+        return "frozen"
+    end
+    if status1 & STATUS1_TOXIC_POISON ~= 0 then
+        return "badly poisoned"
+    end
+    if status1 & STATUS1_POISON ~= 0 then
+        return "poisoned"
+    end
+    if status1 & STATUS1_BURN ~= 0 then
+        return "burned"
+    end
+    if status1 & STATUS1_PARALYSIS ~= 0 then
+        return "paralyzed"
+    end
+    if status1 & STATUS1_SLEEP_MASK ~= 0 then
+        return "asleep"
+    end
+    if status2 & STATUS2_CONFUSION_MASK ~= 0 then
+        return "confused"
+    end
     return nil
 end
 
@@ -778,14 +1030,19 @@ local function readActiveMon(base)
     local level = emu:read8(base + 0x2A)
     local maxHp = emu:read16(base + 0x2C)
     local status1 = emu:read32(base + 0x4C)
+    local status2 = emu:read32(base + 0x50)
     local personality = emu:read32(base + 0x48)
-    return species, hp, maxHp, level, status1, personality
+    return species, hp, maxHp, level, status1, personality, status2
 end
 
 local function readNickname(partyMonBase)
     return decodeGen3Bytes(partyMonBase + NICKNAME_OFFSET, NICKNAME_MAX_CHARS)
 end
 
+-- moves/pp: decrypted from the Attacks substructure the same way species is decrypted from
+-- Growth -- 3 encrypted u32 words (moves 1-2, moves 3-4, pp 1-4), XORed with the same key,
+-- located at whichever of the 4 substructure slots ATTACKS_SLOT_BY_PID24 says for this mon's
+-- personality.
 local function readPartyMon(base)
     local personality = emu:read32(base)
     local otId = emu:read32(base + 4)
@@ -797,7 +1054,34 @@ local function readPartyMon(base)
     local hp = emu:read16(base + 0x56)
     local maxHp = emu:read16(base + 0x58)
     local nickname = readNickname(base)
-    return species, hp, maxHp, level, nickname
+
+    local attacksSlot = ATTACKS_SLOT_BY_PID24[personality % 24]
+    local attacksBase = base + 0x20 + attacksSlot * 12
+    local movesWord0 = emu:read32(attacksBase + 0) ~ key
+    local movesWord1 = emu:read32(attacksBase + 4) ~ key
+    local ppWord = emu:read32(attacksBase + 8) ~ key
+    local moves = {
+        movesWord0 & 0xFFFF,
+        (movesWord0 >> 16) & 0xFFFF,
+        movesWord1 & 0xFFFF,
+        (movesWord1 >> 16) & 0xFFFF,
+    }
+    local pp = {
+        ppWord & 0xFF,
+        (ppWord >> 8) & 0xFF,
+        (ppWord >> 16) & 0xFF,
+        (ppWord >> 24) & 0xFF,
+    }
+
+    return species, hp, maxHp, level, nickname, personality, moves, pp
+end
+
+-- Formats an optional string as a JSON string literal, or the bare `null` token when absent
+local function jsonOptionalString(value)
+    if value == nil then
+        return "null"
+    end
+    return '"' .. value .. '"'
 end
 
 -- battler: restricts which half of gEnemyParty is included, for a double battle against two
@@ -817,11 +1101,13 @@ local function buildPartyJSON(baseAddr, battler)
     end
     local parts = {}
     for i = startSlot, endSlot do
-        local species, hp, maxHp, level, nickname = readPartyMon(baseAddr + i * PARTY_MON_SIZE)
+        local species, hp, maxHp, level, nickname, personality, moves, pp = readPartyMon(baseAddr + i * PARTY_MON_SIZE)
         if species ~= 0 then
             table.insert(parts, string.format(
-                '{"partySlot":%d,"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s"}',
-                i, species, hp, maxHp, level, nickname))
+                '{"partySlot":%d,"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","gender":%s,'
+                .. '"moveIds":[%d,%d,%d,%d],"pp":[%d,%d,%d,%d]}',
+                i, species, hp, maxHp, level, nickname, jsonOptionalString(computeGender(species, personality)),
+                moves[1], moves[2], moves[3], moves[4], pp[1], pp[2], pp[3], pp[4]))
         end
     end
     return "[" .. table.concat(parts, ",") .. "]"
@@ -842,22 +1128,18 @@ end
 -- msgType: "battle_state" for a genuine new decision request ("your turn"), "battle_update" for a
 -- passive HP/status refresh. mustSwitch: true when the enemy's active mon just fainted and
 -- Player 2 may only pick a replacement this turn.
--- Formats an optional string as a JSON string literal, or the bare `null` token when absent
-local function jsonOptionalString(value)
-    if value == nil then return "null" end
-    return '"' .. value .. '"'
-end
 
--- Builds a single ActiveMon JSON object (species/hp/maxHp/level/nickname/status) for the mon at
--- `monBase` (a gBattleMons[] entry), looking its nickname up in `partyBase` (gEnemyParty or
+-- Builds a single ActiveMon JSON object (species/hp/maxHp/level/nickname/status/gender) for the
+-- mon at `monBase` (a gBattleMons[] entry), looking its nickname up in `partyBase` (gEnemyParty or
 -- gPlayerParty, whichever side `monBase` belongs to).
 local function buildActiveMonJSON(monBase, partyBase)
-    local species, hp, maxHp, level, status1, personality = readActiveMon(monBase)
+    local species, hp, maxHp, level, status1, personality, status2 = readActiveMon(monBase)
     local partySlot = findActivePartySlot(partyBase, personality)
     local nickname = readNickname(partyBase + partySlot * PARTY_MON_SIZE)
     return string.format(
-        '{"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","status":%s}',
-        species, hp, maxHp, level, nickname, jsonOptionalString(decodeStatus1(status1)))
+        '{"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","status":%s,"gender":%s}',
+        species, hp, maxHp, level, nickname, jsonOptionalString(decodeStatus(status1, status2)),
+        jsonOptionalString(computeGender(species, personality)))
 end
 
 -- Only items this project actually knows how to inject (see ITEM_AI_CLASSIFICATION) are offered
@@ -892,21 +1174,13 @@ local function extractEnemyState(msgType, battler, mustSwitch)
         playerActive2JSON = buildActiveMonJSON(battlerMonBase(2), ADDR_GPLAYER_PARTY)
     end
     return string.format(
-        '{"type":"%s","battlerSlot":%d,"mustSwitch":%s,"enemyMoveIds":[%d,%d,%d,%d],"pp":[%d,%d,%d,%d],'
-        .. '"enemyActive":%s,'
-        .. '"playerActive":%s,'
-        .. '"playerActive2":%s,'
-        .. '"enemyActivePartySlot":%d,'
-        .. '"enemyParty":%s,'
-        .. '"availableItems":%s}',
-        msgType, battler, mustSwitch and "true" or "false",
+        '{"type":"%s","battlerSlot":%d,"mustSwitch":%s,"enemyMoveIds":[%d,%d,%d,%d],"pp":[%d,%d,%d,%d],' ..
+            '"enemyActive":%s,' .. '"playerActive":%s,' .. '"playerActive2":%s,' .. '"enemyActivePartySlot":%d,' ..
+            '"enemyParty":%s,' .. '"availableItems":%s}', msgType, battler, mustSwitch and "true" or "false",
         moveIds[1], moveIds[2], moveIds[3], moveIds[4], pp[1], pp[2], pp[3], pp[4],
         buildActiveMonJSON(battlerMonBase(battler), ADDR_GENEMY_PARTY),
-        buildActiveMonJSON(ADDR_PLAYER_ACTIVE, ADDR_GPLAYER_PARTY),
-        playerActive2JSON,
-        activePartySlot,
-        buildPartyJSON(ADDR_GENEMY_PARTY, battler),
-        buildAvailableItemsJSON(battler))
+        buildActiveMonJSON(ADDR_PLAYER_ACTIVE, ADDR_GPLAYER_PARTY), playerActive2JSON, activePartySlot,
+        buildPartyJSON(ADDR_GENEMY_PARTY, battler), buildAvailableItemsJSON(battler))
 end
 
 -- Holds each enemy battler's action-type decision (fight/switch/item) until Player 2 answers for
@@ -1050,7 +1324,10 @@ local function onOpponentHandleChoosePokemon()
     if voluntarySwitchSlot[battler] ~= nil then
         local slot = voluntarySwitchSlot[battler]
         voluntarySwitchSlot[battler] = nil
-        pendingAction[battler] = { action = "switch", partySlot = slot }
+        pendingAction[battler] = {
+            action = "switch",
+            partySlot = slot
+        }
         steeringArmed[battler] = true
         return
     end
@@ -1065,10 +1342,21 @@ local function onOpponentHandleChoosePokemon()
     if not awaitingReplacement[battler] then
         awaitingReplacement[battler] = true
         pendingAction[battler] = nil
-        console:log("[client] enemy battler " .. battler .. "'s mon fainted, notifying Player 2 for a replacement (waiting...)")
+        console:log("[client] enemy battler " .. battler ..
+                        "'s mon fainted, notifying Player 2 for a replacement (waiting...)")
         sendJSON(extractEnemyState("battle_state", battler, true))
         showBattleMessage("Waiting for " .. player2Name .. " to pick a replacement...")
         return
+    end
+
+    -- Only a "switch" choice is valid here -- a "move"/"item" choice would arm steering without
+    -- actually forcing a party slot in onGetMostSuitableMon (it only does that for action=="switch"),
+    -- silently letting the AI's own unintercepted logic pick the replacement instead. Rejecting
+    -- anything else here (rather than trusting the interface to only ever send a switch while a
+    -- replacement is pending) keeps that mismatch from ever reaching that point.
+    if pendingAction[battler] ~= nil and pendingAction[battler].action ~= "switch" then
+        console:error("[client] rejected non-switch action while a replacement was pending for battler " .. battler)
+        pendingAction[battler] = nil
     end
 
     if pendingAction[battler] == nil then
@@ -1082,7 +1370,9 @@ end
 
 local function onShouldSwitch()
     local battler = emu:read8(ADDR_ACTIVE_BATTLER)
-    if not steeringArmed[battler] then return end
+    if not steeringArmed[battler] then
+        return
+    end
     if pendingAction[battler] and pendingAction[battler].action == "switch" then
         emu:writeRegister("r0", 1)
     else
@@ -1094,7 +1384,9 @@ end
 
 local function onGetMostSuitableMon()
     local battler = emu:read8(ADDR_ACTIVE_BATTLER)
-    if not steeringArmed[battler] then return end
+    if not steeringArmed[battler] then
+        return
+    end
     if pendingAction[battler] and pendingAction[battler].action == "switch" and pendingAction[battler].partySlot ~= nil then
         emu:writeRegister("r0", pendingAction[battler].partySlot)
         local lr = emu:readRegister("lr")
@@ -1114,9 +1406,12 @@ end
 -- extended there yet (needs gTrainerBattleOpponent_B, not yet discovered).
 local function onShouldUseItem()
     local battler = emu:read8(ADDR_ACTIVE_BATTLER)
-    if not steeringArmed[battler] then return end
+    if not steeringArmed[battler] then
+        return
+    end
 
-    if battler == 1 and pendingAction[battler] and pendingAction[battler].action == "item" and pendingAction[battler].itemId then
+    if battler == 1 and pendingAction[battler] and pendingAction[battler].action == "item" and
+        pendingAction[battler].itemId then
         local itemId = pendingAction[battler].itemId
         local classification = ITEM_AI_CLASSIFICATION[itemId]
         if classification then
@@ -1155,7 +1450,9 @@ end
 -- broke singles (a move could miss its injection window and silently fall back to whatever the
 -- AI had already picked).
 local function tryInjectMoveForBattler(battler)
-    if not (pendingAction[battler] and pendingAction[battler].action == "move") then return end
+    if not (pendingAction[battler] and pendingAction[battler].action == "move") then
+        return
+    end
 
     local commAddr = battlerCommAddr(battler)
     local bufferBase = battlerBufferBase(battler)
@@ -1163,10 +1460,13 @@ local function tryInjectMoveForBattler(battler)
     local header = emu:read8(bufferBase)
     local action = emu:read8(bufferBase + 1)
 
-    local enemyDecisionPending = (enemyState == STATE_WAIT_ACTION_CASE_CHOSEN
-        and header == CONTROLLER_TWORETURNVALUES and action == B_ACTION_EXEC_SCRIPT)
+    local enemyDecisionPending =
+        (enemyState == STATE_WAIT_ACTION_CASE_CHOSEN and header == CONTROLLER_TWORETURNVALUES and action ==
+            B_ACTION_EXEC_SCRIPT)
 
-    if not enemyDecisionPending then return end
+    if not enemyDecisionPending then
+        return
+    end
 
     local moveIndex = pendingAction[battler].moveIndex
     local target = pendingAction[battler].target or PLAYER_BATTLER_INDEX
@@ -1174,6 +1474,8 @@ local function tryInjectMoveForBattler(battler)
     emu:write8(bufferBase + 3, target)
     console:log("[client] injected battler " .. battler .. " move " .. moveIndex)
     pendingAction[battler] = nil
+    steeringArmed[battler] = false
+
     player2Committed[battler] = true
     flushPendingPlayerLogEntries()
 
@@ -1188,7 +1490,9 @@ local function tryInjectMoveForBattler(battler)
 end
 
 local function onHandleTurnActionSelection()
-    if not isControllableBattle() then return end
+    if not isControllableBattle() then
+        return
+    end
     tryInjectMoveForBattler(1)
     if isDoubleBattle() then
         tryInjectMoveForBattler(3)
@@ -1214,7 +1518,9 @@ end
 
 local function logMove(battler)
     local moveId = emu:read16(ADDR_CHOSEN_MOVE_BY_BATTLER + battler * 2)
-    if moveId == 0 then return end
+    if moveId == 0 then
+        return
+    end
     local species = emu:read16(battlerMonBase(battler) + 0x00)
     queueMoveLog(battler, moveId, species)
 end
@@ -1226,7 +1532,7 @@ end
 -- decision (e.g. during battle setup), which produced false log entries from whatever
 -- gChosenMoveByBattler[battler] happened to still hold from a previous battle.
 local function checkBattleLog()
-    for _, battler in ipairs({ 0, 2 }) do
+    for _, battler in ipairs({0, 2}) do
         local commState = emu:read8(battlerCommAddr(battler))
         if commState > STATE_WAIT_ACTION_CASE_CHOSEN and (lastCommState[battler] or 0) <= STATE_WAIT_ACTION_CASE_CHOSEN then
             local action = emu:read8(ADDR_CHOSEN_ACTION_BY_BATTLER + battler)
@@ -1256,8 +1562,7 @@ local function checkBattleLog()
             lastMoveLogHp[battler] = hp
             if not wasFirstRead and species ~= 0 then
                 emitBattleLog(battler, string.format(
-                    '{"type":"battle_log","battler":%d,"event":"switch","speciesId":%d}',
-                    battler, species))
+                    '{"type":"battle_log","battler":%d,"event":"switch","speciesId":%d}', battler, species))
             end
         elseif hp ~= lastMoveLogHp[battler] then
             local previousHp = lastMoveLogHp[battler]
@@ -1293,7 +1598,7 @@ local function resetBattleLog()
         [0] = emu:read8(battlerCommAddr(0)),
         [1] = emu:read8(battlerCommAddr(1)),
         [2] = emu:read8(battlerCommAddr(2)),
-        [3] = emu:read8(battlerCommAddr(3)),
+        [3] = emu:read8(battlerCommAddr(3))
     }
     lastBattlerPersonality = {}
     pendingMoveLog = {}
@@ -1303,7 +1608,9 @@ local function resetBattleLog()
     pendingPlayerLogEntries = {}
     awaitingReplacement = {}
     voluntarySwitchSlot = {}
-    usedItemCounts = { [1] = {} }
+    usedItemCounts = {
+        [1] = {}
+    }
 end
 
 local reconnectCounter = 0
@@ -1330,9 +1637,14 @@ local function onFrame()
         heartbeatCounter = heartbeatCounter + 1
         if heartbeatCounter >= HEARTBEAT_INTERVAL_FRAMES then
             heartbeatCounter = 0
-            sendJSON(extractEnemyState("battle_update", 1))
+            -- mustSwitch must reflect whatever onOpponentHandleChoosePokemon last told the
+            -- interface, not silently default to false -- leaving it out here was clobbering a
+            -- genuine "your Pokemon fainted" state back to normal roughly every half second,
+            -- letting the move-selection UI flip back on for a battler that still needed a
+            -- replacement chosen.
+            sendJSON(extractEnemyState("battle_update", 1, awaitingReplacement[1]))
             if isDoubleBattle() then
-                sendJSON(extractEnemyState("battle_update", 3))
+                sendJSON(extractEnemyState("battle_update", 3, awaitingReplacement[3]))
             end
         end
     elseif wasInBattle then
@@ -1357,10 +1669,8 @@ end
 local EXPECTED_ROM_CODE = "BPEE"
 local romCode = emu:getGameCode()
 if romCode ~= EXPECTED_ROM_CODE then
-    console:error(
-        "[client] ROM mismatch: expected " .. EXPECTED_ROM_CODE .. " (Pokemon Emerald, US), got "
-        .. tostring(romCode) .. " instead. Refusing to run -- memory addresses would misalign."
-    )
+    console:error("[client] ROM mismatch: expected " .. EXPECTED_ROM_CODE .. " (Pokemon Emerald, US), got " ..
+                      tostring(romCode) .. " instead. Refusing to run -- memory addresses would misalign.")
     return
 end
 
