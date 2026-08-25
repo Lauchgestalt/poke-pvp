@@ -27,32 +27,62 @@ local ADDR_SHOULD_SWITCH = 0x08063614
 local ADDR_GET_MOST_SUITABLE_MON = 0x08063A90
 local ADDR_SHOULD_USE_ITEM = 0x08063EE0
 local ADDR_HANDLE_TURN_ACTION_SELECTION = 0x0803BE74
+
+-- gActiveBattler: which battler (0-3) the currently-executing AI decision function is deciding
+-- for. Found live via before/after Memory Search (byte value 1 -> 3 across the two enemy
+-- battlers' decisions within one double-battle turn) -- a single survivor address, reproduced
+-- identically across two separate turns.
+local ADDR_ACTIVE_BATTLER = 0x02024064
+
+-- gBattleBufferB[0..3] / gBattleCommunication[0..3]. Index 1's address (the enemy's, in singles)
+-- was already known; index 3's stride (0x200 for the buffer, matching its declared
+-- `u8[MAX_BATTLERS_COUNT][0x200]` size; 1 byte for gBattleCommunication) confirmed live the same
+-- way as gBattleMons's stride -- header/action/comm-state values for battler 3 matched the exact
+-- same sensible protocol states already known from singles.
 local ADDR_GBATTLE_BUFFER_B1 = 0x02023A64 -- gBattleBufferB[1], the enemy's buffer
 local ADDR_BATTLE_COMMUNICATION_1 = 0x02024333 -- gBattleCommunication[1] (enemy)
+local GBATTLE_BUFFER_STRIDE = 0x200
+
+local function battlerBufferBase(battler)
+    return ADDR_GBATTLE_BUFFER_B1 + (battler - 1) * GBATTLE_BUFFER_STRIDE
+end
+local function battlerCommAddr(battler)
+    return ADDR_BATTLE_COMMUNICATION_1 + (battler - 1)
+end
 
 -- gBattleStruct->chosenItem[0] / ->AI_itemType[0] / ->AI_itemFlags[0]. Found via live Memory
 -- Search (before/after diffing across a real item-use event) since gBattleStruct is heap-allocated
 -- and neither field has a discoverable fixed address in source. Confirmed live: writing item 13
 -- (Potion) + AI_ITEM_HEAL_HP here and forcing ShouldUseItem's return caused the trainer to
 -- genuinely use the Potion, with OpponentHandleChooseItem's response correctly echoing it back.
--- Always index 0 here (not computed per-battler) since this project only ever controls the enemy
--- trainer, whose (gActiveBattler / 2) * 2 offset is always 0 in a single (non-double) battle.
+-- Battler 1 only for now -- item support isn't extended to battler 3 (see ITEM_AI_CLASSIFICATION
+-- usage below), so no need to compute the (gActiveBattler / 2)-based offset for the other slot yet.
 local ADDR_CHOSEN_ITEM = 0x020000D0
 local ADDR_AI_ITEM_TYPE = 0x020000D4
 local ADDR_AI_ITEM_FLAGS = 0x020000D6
 
--- gBattleMons[0]/[1] (struct BattlePokemon): the active player/enemy mon, already decrypted by
--- the game. moves[4] u16 @ +0x0C, pp[4] u8 @ +0x24, species u16 @ +0x00, hp u16 @ +0x28,
--- level u8 @ +0x2A, maxHp u16 @ +0x2C.
-local ADDR_ENEMY_ACTIVE = 0x020240DC
+-- gBattleMons[0..3] (struct BattlePokemon): the four possible active mons (0/2 = player's,
+-- 1/3 = enemy's, in a double battle -- singles only ever uses 0/1), already decrypted by the game.
+-- moves[4] u16 @ +0x0C, pp[4] u8 @ +0x24, species u16 @ +0x00, hp u16 @ +0x28, level u8 @ +0x2A,
+-- maxHp u16 @ +0x2C. Stride (0x58) confirmed live for battler 3 via species/HP cross-checked
+-- against the actual on-screen mon across two turns of a real double battle.
 local ADDR_PLAYER_ACTIVE = 0x02024084
-local ADDR_ENEMY_MOVES = 0x020240E8
-local ADDR_ENEMY_PP = 0x02024100
+local BATTLE_MON_STRIDE = 0x58
+local ADDR_ENEMY_ACTIVE = ADDR_PLAYER_ACTIVE + 1 * BATTLE_MON_STRIDE
+
+local function battlerMonBase(battler)
+    return ADDR_PLAYER_ACTIVE + battler * BATTLE_MON_STRIDE
+end
+local function battlerMovesBase(battler)
+    return battlerMonBase(battler) + 0x0C
+end
+local function battlerPPBase(battler)
+    return battlerMonBase(battler) + 0x24
+end
 
 -- gEnemyParty (struct Pokemon[6], 0x64 bytes each). Species is encrypted with a per-mon key
 -- derived from personality/OT ID; level/hp/maxHp are not. Nickname readable directly at +0x08.
 local ADDR_GENEMY_PARTY = 0x02024744
-local ADDR_ENEMY_PARTY_INDEX = 0x02024070 -- which party slot is currently active (u16)
 -- gPlayerParty -- same struct/layout as gEnemyParty.
 local ADDR_GPLAYER_PARTY = 0x020244EC
 local PARTY_MON_SIZE = 0x64
@@ -268,42 +298,62 @@ local rxBuffer = ""
 -- instead), since relay and emulator aren't necessarily on the same machine as Player 2's
 -- browser -- capturing/encoding a frame ~24x/sec is real work worth skipping when nobody wants it.
 local streamEnabled = true
--- pendingAction: nil, or {action="move", moveIndex=N}, or {action="switch", partySlot=N}
---             or {action="item", itemId=N}
-local pendingAction = nil
--- How many of each item Player 2 has already used this battle -- gTrainers' item list is read
--- straight from ROM (read-only), so it never reflects consumption on its own; this is subtracted
--- from that raw count wherever items are offered/validated. Reset per battle, see resetBattleLog().
-local usedItemCounts = {}
-local awaitingAction = false
-local awaitingReplacement = false
+-- All per-enemy-battler decision state below is keyed by battler number (1, or 3 in a double
+-- battle) rather than being a single shared value -- each enemy battler makes its own independent
+-- decision each turn, using its own slice of this state. Singles only ever touches key 1, so its
+-- behavior is unchanged; a missing key (e.g. [3] before a double battle's second battler has had
+-- its first decision) reads as nil/false, same as the old singular defaults did.
+--
+-- pendingAction[battler]: nil, or {action="move", moveIndex=N}, or {action="switch", partySlot=N}
+--                      or {action="item", itemId=N}
+local pendingAction = {}
+-- How many of each item Player 2 has already used this battle, per battler -- gTrainers' item
+-- list is read straight from ROM (read-only), so it never reflects consumption on its own; this is
+-- subtracted from that raw count wherever items are offered/validated. Reset per battle, see
+-- resetBattleLog(). Battler 3 stays empty for now -- see ITEM_AI_CLASSIFICATION's usage, item
+-- support isn't extended to battler 3 yet (needs gTrainerBattleOpponent_B, not yet discovered).
+local usedItemCounts = { [1] = {} }
+local awaitingAction = {}
+local awaitingReplacement = {}
 -- Player 2 only sees "waiting for your move" after Player 1's own menu has actually closed, so
 -- the message doesn't get drawn while the battle screen is still settling in. Detected via the
--- same turn-state edge the battle log below already uses, applied to Player 1's own battler.
+-- same turn-state edge the battle log below already uses, applied to Player 1's own battler(s).
+-- In a double battle Player 1 picks moves for both their own mons via two sequential menus
+-- (battler 0 then battler 2) -- watching only battler 0 fired this message while Player 1 was
+-- still picking their SECOND mon's move, stomping their own menu. Both must be ready in doubles.
 local playerActionReady = false
 local lastPlayerCommState = 0
+local lastPlayerCommState2 = 0
+local player1Battler0Ready = false
+local player1Battler2Ready = false
 local battleMessageShown = false
 -- Player 2's chosen display name -- used in the waiting message and to replace the trainer's
 -- real name in-battle (see substitutePlayer1TrainerName).
 local player2Name = "Player 2"
--- True only for the brief window between letting Player 2's decision through and that decision's
+-- True only for the brief window between letting a battler's decision through and that decision's
 -- Should*/GetMostSuitableMon chain finishing. Needed because those same functions also get called
 -- for unrelated things (e.g. a forced switch-in after a faint), and would otherwise pick up a
 -- stale leftover pendingAction that has nothing to do with the current call.
-local steeringArmed = false
+local steeringArmed = {}
 -- The game calls GetMostSuitableMonToSwitchInto() twice for a single voluntary switch (once to
 -- decide, once to confirm) -- normally invisible since both resolve instantly. Remembers Player
 -- 2's answer from the first call so the second doesn't re-prompt for the same decision.
-local voluntarySwitchSlot = nil
--- Buffers Player 1's battle-log entries until Player 2 has committed their own choice for the
--- turn, so Player 2 can't see what Player 1 did before answering themselves.
-local player2Committed = false
+local voluntarySwitchSlot = {}
+-- Buffers Player 1's battle-log entries until Player 2 has committed every enemy battler's choice
+-- for the turn, so Player 2 can't see what Player 1 did before answering themselves.
+local player2Committed = {}
 local pendingPlayerLogEntries = {}
 local flushPendingPlayerLogEntries -- defined later, forward-declared for use above its definition
+local isDoubleBattle -- defined later (needs isInBattle), forward-declared for use in handleMessage
+local allEnemyBattlersCommitted -- defined later (needs isDoubleBattle), forward-declared for use above
 
 -- Remaining counts for every supported item the current trainer carries, after subtracting what
 -- Player 2 has already used this battle (see usedItemCounts). Items at 0 remaining are omitted.
-local function remainingItemCounts()
+-- Battler 3 always gets an empty list -- item support isn't extended there yet (see
+-- ITEM_AI_CLASSIFICATION's usage; needs gTrainerBattleOpponent_B, not yet discovered), and
+-- readTrainerItems() only ever reads trainer A's items regardless of which battler is asking.
+local function remainingItemCounts(battler)
+    if battler ~= 1 then return {} end
     local counts = {}
     local order = {}
     for _, itemId in ipairs(readTrainerItems()) do
@@ -315,7 +365,7 @@ local function remainingItemCounts()
             counts[itemId] = counts[itemId] + 1
         end
     end
-    for itemId, used in pairs(usedItemCounts) do
+    for itemId, used in pairs(usedItemCounts[battler] or {}) do
         if counts[itemId] then
             counts[itemId] = counts[itemId] - used
         end
@@ -329,10 +379,10 @@ local function remainingItemCounts()
     return result
 end
 
--- Move log entries are queued when chosen, then only actually sent once the target's HP proves
--- the move executed
-local pendingMoveLog = { [0] = nil, [1] = nil }
-local lastMoveLogHp = { [0] = -1, [1] = -1 }
+-- Move log entries are queued when chosen (keyed by battler, 0-3), then only actually sent once
+-- the target's HP proves the move executed. Real values seeded by resetBattleLog() on battle start.
+local pendingMoveLog = {}
+local lastMoveLogHp = {}
 
 -- Called whenever the relay connection is lost or never came up, so the retry loop in onFrame
 -- picks it back up. Also re-arms playerNameSent -- a freshly (re)started relay has no memory of
@@ -429,20 +479,48 @@ function handleMessage(line)
         return
     end
 
+    -- battlerSlot identifies which enemy battler this choice is for (1, or 3 in a double battle).
+    -- Defaults to 1 when absent so existing singles-only clients keep working unchanged.
+    local battlerSlot = tonumber(line:match('"battlerSlot"%s*:%s*(%d+)')) or 1
+    if battlerSlot ~= 1 and battlerSlot ~= 3 then
+        console:log("[client] rejected out-of-range battlerSlot: " .. battlerSlot)
+        return
+    end
+
     local action = line:match('"action"%s*:%s*"(%a+)"')
     if action == "move" then
         local moveIndex = tonumber(line:match('"moveIndex"%s*:%s*(%d+)'))
+        -- target: which of Player 1's mons to hit -- 0 or 2, only meaningful in a double battle
+        -- (singles always targets 0). Defaults to 0 so non-doubles-aware clients keep working.
+        local target = tonumber(line:match('"target"%s*:%s*(%d+)')) or PLAYER_BATTLER_INDEX
+        if isDoubleBattle() and target ~= 0 and target ~= 2 then
+            console:log("[client] rejected out-of-range target: " .. target)
+            return
+        elseif not isDoubleBattle() then
+            target = PLAYER_BATTLER_INDEX
+        end
         if moveIndex and moveIndex >= 0 and moveIndex <= 3 then
-            pendingAction = { action = "move", moveIndex = moveIndex }
-            console:log("[client] received action: move " .. moveIndex)
+            pendingAction[battlerSlot] = { action = "move", moveIndex = moveIndex, target = target }
+            console:log("[client] received action: battler " .. battlerSlot .. " move " .. moveIndex .. " -> target " .. target)
         else
             console:log("[client] rejected out-of-range moveIndex: " .. tostring(moveIndex))
         end
     elseif action == "switch" then
         local partySlot = tonumber(line:match('"partySlot"%s*:%s*(%d+)'))
-        if partySlot and partySlot >= 0 and partySlot <= 5 then
-            pendingAction = { action = "switch", partySlot = partySlot }
-            console:log("[client] received action: switch to slot " .. partySlot)
+        -- A battler may only switch within its own trainer's half of gEnemyParty in a double
+        -- battle (same split as buildPartyJSON/countAliveNonActiveEnemyMons) -- otherwise it could
+        -- switch into a mon that belongs to the OTHER enemy battler's trainer entirely.
+        local minSlot, maxSlot = 0, PARTY_SIZE - 1
+        if isDoubleBattle() then
+            if battlerSlot == 1 then
+                minSlot, maxSlot = 0, PARTY_SIZE / 2 - 1
+            else
+                minSlot, maxSlot = PARTY_SIZE / 2, PARTY_SIZE - 1
+            end
+        end
+        if partySlot and partySlot >= minSlot and partySlot <= maxSlot then
+            pendingAction[battlerSlot] = { action = "switch", partySlot = partySlot }
+            console:log("[client] received action: battler " .. battlerSlot .. " switch to slot " .. partySlot)
         else
             console:log("[client] rejected out-of-range partySlot: " .. tostring(partySlot))
         end
@@ -450,7 +528,7 @@ function handleMessage(line)
         local itemId = tonumber(line:match('"itemId"%s*:%s*(%d+)'))
         local hasRemaining = false
         if itemId then
-            for _, entry in ipairs(remainingItemCounts()) do
+            for _, entry in ipairs(remainingItemCounts(battlerSlot)) do
                 if entry.itemId == itemId then
                     hasRemaining = true
                     break
@@ -458,19 +536,23 @@ function handleMessage(line)
             end
         end
         if hasRemaining then
-            pendingAction = { action = "item", itemId = itemId }
-            console:log("[client] received action: item " .. itemId)
+            pendingAction[battlerSlot] = { action = "item", itemId = itemId }
+            console:log("[client] received action: battler " .. battlerSlot .. " item " .. itemId)
         else
             console:log("[client] rejected item choice (none remaining or unsupported): " .. tostring(itemId))
         end
     end
 end
 
--- Player 1's battle-log entries are held back until Player 2 has committed their own choice for
--- the turn, so Player 2 can't see Player 1's move before answering. Player 2's own entries are
--- never delayed.
+-- Player 1's battle-log entries (both their mons, battlers 0 and 2) are held back until Player 2
+-- has committed every enemy battler's choice for the turn, so Player 2 can't see Player 1's move
+-- before answering. Player 2's own entries (battlers 1 and 3) are never delayed.
+local function isPlayerOneBattler(battler)
+    return battler == 0 or battler == 2
+end
+
 local function emitBattleLog(battler, jsonLine)
-    if battler == 0 and not player2Committed then
+    if isPlayerOneBattler(battler) and not allEnemyBattlersCommitted() then
         table.insert(pendingPlayerLogEntries, jsonLine)
     else
         sendJSON(jsonLine)
@@ -478,23 +560,36 @@ local function emitBattleLog(battler, jsonLine)
 end
 
 -- Queues raw data rather than a pre-built JSON string -- damage isn't known until the move
--- actually resolves (flush time), so the JSON can't be assembled yet.
+-- actually resolves (flush time), so the JSON can't be assembled yet. damage starts nil and
+-- accumulates across however many hits the move ends up dealing (see accumulateMoveLogDamage) --
+-- a multi-hit move like Double Kick fires several separate HP changes for the SAME queued entry
+-- before it's finally flushed.
 local function queueMoveLog(battler, moveId, speciesId)
-    pendingMoveLog[battler] = { moveId = moveId, speciesId = speciesId }
+    pendingMoveLog[battler] = { moveId = moveId, speciesId = speciesId, damage = nil }
 end
 
--- Sends `attacker`'s queued move log entry, if any -- called once the target's HP proves the
--- move actually executed, or once battle text confirms it missed. `damage` is the HP the target
--- lost (can be negative for a draining move that healed the attacker instead -- the interface
--- displays that as healing, not damage); nil when `missed` is true, or when flushed via the
--- safety net in onOpponentHandleChooseAction
-local function flushMoveLog(attacker, damage, missed)
+-- Adds one hit's worth of HP delta to attacker's still-queued entry, without sending anything yet
+-- -- multi-hit moves call this once per hit. Usually positive (damage taken by the target); can be
+-- negative if `attacker` is healing itself via a draining move rather than damaging the target --
+-- the interface displays that as healing, not damage.
+local function accumulateMoveLogDamage(attacker, delta)
+    local entry = pendingMoveLog[attacker]
+    if not entry then return end
+    entry.damage = (entry.damage or 0) + delta
+end
+
+-- Sends `attacker`'s queued move log entry, if any, with whatever damage has accumulated so far
+-- (see accumulateMoveLogDamage). Called once the move is confirmed done resolving -- the next
+-- "X used Y!" for any battler, battle text confirming a miss, or the safety-net flush in
+-- onOpponentHandleChooseAction -- not on every individual HP change, so a multi-hit move's several
+-- hits all land in the same log entry instead of only the first one being reported.
+local function flushMoveLog(attacker, missed)
     local entry = pendingMoveLog[attacker]
     if not entry then return end
     pendingMoveLog[attacker] = nil
-    if attacker == 0 and not player2Committed then return end
+    if isPlayerOneBattler(attacker) and not allEnemyBattlersCommitted() then return end
     local extraField = missed and ',"missed":true'
-        or (damage and string.format(',"damage":%d', damage))
+        or (entry.damage and string.format(',"damage":%d', entry.damage))
         or ""
     sendJSON(string.format(
         '{"type":"battle_log","battler":%d,"event":"move","moveId":%d,"speciesId":%d%s}',
@@ -568,10 +663,26 @@ local function sendPlayerNameIfNeeded()
 end
 
 -- Player 2 only ever influences trainer battles -- wild encounters play out untouched.
+local BATTLE_TYPE_DOUBLE = 0x1
+
 local function isControllableBattle()
     if not isInBattle() then return false end
     local flags = emu:read32(ADDR_BATTLE_TYPE_FLAGS)
     return (flags & BATTLE_TYPE_TRAINER) ~= 0
+end
+
+isDoubleBattle = function()
+    if not isInBattle() then return false end
+    return (emu:read32(ADDR_BATTLE_TYPE_FLAGS) & BATTLE_TYPE_DOUBLE) ~= 0
+end
+
+-- True once every enemy battler active this battle has committed its choice for the turn (a
+-- single-battler singles battle just checks battler 1; a double battle needs both 1 and 3).
+allEnemyBattlersCommitted = function()
+    if isDoubleBattle() then
+        return player2Committed[1] and player2Committed[3]
+    end
+    return player2Committed[1]
 end
 
 local function decodeGen3Bytes(addr, maxChars)
@@ -621,9 +732,19 @@ local function onBattlePutTextOnWindow()
         local textAddr = emu:readRegister("r0")
         local text = decodeGen3Bytes(textAddr, BATTLE_TEXT_SEARCH_WINDOW)
         if text:find(" used ", 1, true) then
-            currentlyResolvingBattler = (text:sub(1, 4) == "Foe ") and 1 or 0
+            -- gActiveBattler is reused by the engine as "current attacker" during move execution
+            -- text, not just AI decisions -- confirmed live, exactly matching the actual attacker
+            -- (0/1/2/3) every time across a real double battle turn. Far more robust than parsing
+            -- the name out of the text itself, which breaks the moment two mons share a name.
+            -- Flush whatever was still queued for the PREVIOUS attacker first -- a new move
+            -- starting to narrate means the last one is definitely done resolving (covers a
+            -- multi-hit move's accumulated damage, and a status move that never changed any HP).
+            if currentlyResolvingBattler ~= nil then
+                flushMoveLog(currentlyResolvingBattler)
+            end
+            currentlyResolvingBattler = emu:read8(ADDR_ACTIVE_BATTLER)
         elseif text:find("missed", 1, true) and currentlyResolvingBattler ~= nil then
-            flushMoveLog(currentlyResolvingBattler, nil, true)
+            flushMoveLog(currentlyResolvingBattler, true)
             currentlyResolvingBattler = nil
         end
         substitutePlayer1TrainerName(textAddr)
@@ -679,9 +800,23 @@ local function readPartyMon(base)
     return species, hp, maxHp, level, nickname
 end
 
-local function buildPartyJSON(baseAddr)
+-- battler: restricts which half of gEnemyParty is included, for a double battle against two
+-- separate trainers -- confirmed from source (CreateNPCTrainerParty(&gEnemyParty[3],
+-- gTrainerBattleOpponent_B, ...)) that trainer A's 3 mons occupy slots 0-2 and trainer B's occupy
+-- 3-5. Without this, both enemy battlers' switch lists showed all 6 mons combined, including the
+-- OTHER battler's own already-active mon as if it were a valid switch-in target. Singles (battler
+-- 1, not a double battle) shows all 6 slots as before -- there's only one trainer, no split to make.
+local function buildPartyJSON(baseAddr, battler)
+    local startSlot, endSlot = 0, PARTY_SIZE - 1
+    if isDoubleBattle() then
+        if battler == 1 then
+            startSlot, endSlot = 0, PARTY_SIZE / 2 - 1
+        elseif battler == 3 then
+            startSlot, endSlot = PARTY_SIZE / 2, PARTY_SIZE - 1
+        end
+    end
     local parts = {}
-    for i = 0, PARTY_SIZE - 1 do
+    for i = startSlot, endSlot do
         local species, hp, maxHp, level, nickname = readPartyMon(baseAddr + i * PARTY_MON_SIZE)
         if species ~= 0 then
             table.insert(parts, string.format(
@@ -713,81 +848,139 @@ local function jsonOptionalString(value)
     return '"' .. value .. '"'
 end
 
+-- Builds a single ActiveMon JSON object (species/hp/maxHp/level/nickname/status) for the mon at
+-- `monBase` (a gBattleMons[] entry), looking its nickname up in `partyBase` (gEnemyParty or
+-- gPlayerParty, whichever side `monBase` belongs to).
+local function buildActiveMonJSON(monBase, partyBase)
+    local species, hp, maxHp, level, status1, personality = readActiveMon(monBase)
+    local partySlot = findActivePartySlot(partyBase, personality)
+    local nickname = readNickname(partyBase + partySlot * PARTY_MON_SIZE)
+    return string.format(
+        '{"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","status":%s}',
+        species, hp, maxHp, level, nickname, jsonOptionalString(decodeStatus1(status1)))
+end
+
 -- Only items this project actually knows how to inject (see ITEM_AI_CLASSIFICATION) are offered
 -- to Player 2, even if the trainer happens to carry something else too. Grouped by item ID with a
 -- count -- a trainer carrying two Potions in separate slots should show "Potion" once, with count 2.
-local function buildAvailableItemsJSON()
+local function buildAvailableItemsJSON(battler)
     local parts = {}
-    for _, entry in ipairs(remainingItemCounts()) do
+    for _, entry in ipairs(remainingItemCounts(battler)) do
         parts[#parts + 1] = string.format('{"itemId":%d,"count":%d}', entry.itemId, entry.count)
     end
     return "[" .. table.concat(parts, ",") .. "]"
 end
 
-local function extractEnemyState(msgType, mustSwitch)
+-- battler: which enemy battler (1, or 3 in a double battle) this state is for. The JSON's
+-- "battlerSlot" field lets a doubles-aware client match this message to the right prompt when two
+-- may be in flight at once. "playerActive" always reflects battler 0; "playerActive2" is battler
+-- 2's mon (null outside a double battle), so a doubles-aware client can show both of Player 1's
+-- mons and let Player 2 pick which one to target.
+local function extractEnemyState(msgType, battler, mustSwitch)
     local moveIds = {}
     local pp = {}
+    local movesBase = battlerMovesBase(battler)
+    local ppBase = battlerPPBase(battler)
     for i = 0, 3 do
-        moveIds[i + 1] = emu:read16(ADDR_ENEMY_MOVES + i * 2)
-        pp[i + 1] = emu:read8(ADDR_ENEMY_PP + i)
+        moveIds[i + 1] = emu:read16(movesBase + i * 2)
+        pp[i + 1] = emu:read8(ppBase + i)
     end
-    local eSpecies, eHp, eMaxHp, eLevel, eStatus1, ePersonality = readActiveMon(ADDR_ENEMY_ACTIVE)
-    local pSpecies, pHp, pMaxHp, pLevel, pStatus1, pPersonality = readActiveMon(ADDR_PLAYER_ACTIVE)
+    local _, _, _, _, _, ePersonality = readActiveMon(battlerMonBase(battler))
     local activePartySlot = findActivePartySlot(ADDR_GENEMY_PARTY, ePersonality)
-    local playerActivePartySlot = findActivePartySlot(ADDR_GPLAYER_PARTY, pPersonality)
-    local eNickname = readNickname(ADDR_GENEMY_PARTY + activePartySlot * PARTY_MON_SIZE)
-    local pNickname = readNickname(ADDR_GPLAYER_PARTY + playerActivePartySlot * PARTY_MON_SIZE)
+    local playerActive2JSON = "null"
+    if isDoubleBattle() then
+        playerActive2JSON = buildActiveMonJSON(battlerMonBase(2), ADDR_GPLAYER_PARTY)
+    end
     return string.format(
-        '{"type":"%s","mustSwitch":%s,"enemyMoveIds":[%d,%d,%d,%d],"pp":[%d,%d,%d,%d],'
-        .. '"enemyActive":{"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","status":%s},'
-        .. '"playerActive":{"species":%d,"hp":%d,"maxHp":%d,"level":%d,"nickname":"%s","status":%s},'
+        '{"type":"%s","battlerSlot":%d,"mustSwitch":%s,"enemyMoveIds":[%d,%d,%d,%d],"pp":[%d,%d,%d,%d],'
+        .. '"enemyActive":%s,'
+        .. '"playerActive":%s,'
+        .. '"playerActive2":%s,'
         .. '"enemyActivePartySlot":%d,'
         .. '"enemyParty":%s,'
         .. '"availableItems":%s}',
-        msgType, mustSwitch and "true" or "false",
+        msgType, battler, mustSwitch and "true" or "false",
         moveIds[1], moveIds[2], moveIds[3], moveIds[4], pp[1], pp[2], pp[3], pp[4],
-        eSpecies, eHp, eMaxHp, eLevel, eNickname, jsonOptionalString(decodeStatus1(eStatus1)),
-        pSpecies, pHp, pMaxHp, pLevel, pNickname, jsonOptionalString(decodeStatus1(pStatus1)),
+        buildActiveMonJSON(battlerMonBase(battler), ADDR_GENEMY_PARTY),
+        buildActiveMonJSON(ADDR_PLAYER_ACTIVE, ADDR_GPLAYER_PARTY),
+        playerActive2JSON,
         activePartySlot,
-        buildPartyJSON(ADDR_GENEMY_PARTY),
-        buildAvailableItemsJSON())
+        buildPartyJSON(ADDR_GENEMY_PARTY, battler),
+        buildAvailableItemsJSON(battler))
 end
 
--- Holds the enemy trainer's action-type decision (fight/switch/item) until Player 2 answers.
+-- Holds each enemy battler's action-type decision (fight/switch/item) until Player 2 answers for
+-- it. Fires once per enemy battler each turn (twice in a double battle, once for battler 1 and
+-- once for battler 3, confirmed live) -- gActiveBattler tells us which one this particular call is
+-- for, so each battler gets its own independent slice of all the decision state below.
 local function onOpponentHandleChooseAction()
     if not isControllableBattle() then
-        awaitingAction = false
+        awaitingAction = {}
         return
     end
 
-    if not awaitingAction then
-        -- Safety net: a move that missed, or a pure status/stat move with no HP change, never
-        -- triggers the HP-based flush in checkBattleLog() and would otherwise sit queued forever.
+    local battler = emu:read8(ADDR_ACTIVE_BATTLER)
+
+    if not awaitingAction[battler] then
+        -- Safety net: a status/stat move with no HP change never gets flushed by the "next move
+        -- starts narrating" trigger in onBattlePutTextOnWindow if it was the LAST move of the
+        -- turn, and would otherwise sit queued forever.
         flushMoveLog(0)
         flushMoveLog(1)
+        flushMoveLog(2)
+        flushMoveLog(3)
+        currentlyResolvingBattler = nil
 
-        awaitingAction = true
-        pendingAction = nil
-        steeringArmed = false
-        awaitingReplacement = false
-        voluntarySwitchSlot = nil
-        player2Committed = false
+        awaitingAction[battler] = true
+        pendingAction[battler] = nil
+        steeringArmed[battler] = false
+        awaitingReplacement[battler] = false
+        voluntarySwitchSlot[battler] = nil
+        player2Committed[battler] = false
         pendingPlayerLogEntries = {}
-        playerActionReady = false
-        battleMessageShown = false
-        console:log("[client] enemy choosing action, notifying Player 2 (waiting...)")
-        sendJSON(extractEnemyState("battle_state"))
+        -- These are shared across both enemy battlers (the "waiting for your move" message is one
+        -- message, not one per battler) -- only reset them when battler 1 starts a fresh turn
+        -- cycle, since it's always the first of the two to fire each turn. Resetting them again
+        -- moments later when battler 3 also starts its own cycle would clear playerActionReady
+        -- right as (or just before) it was about to flip true, and the message would never draw.
+        if battler == 1 then
+            playerActionReady = false
+            player1Battler0Ready = false
+            player1Battler2Ready = false
+            battleMessageShown = false
+        end
+        console:log("[client] enemy battler " .. battler .. " choosing action, notifying Player 2 (waiting...)")
+        -- pcall-wrapped: an exception here would otherwise silently swallow this send with no
+        -- visible error, since this breakpoint isn't normally pcall-protected.
+        local ok, jsonOrErr = pcall(extractEnemyState, "battle_state", battler)
+        if ok then
+            sendJSON(jsonOrErr)
+        else
+            console:error("[client] extractEnemyState threw: " .. tostring(jsonOrErr))
+        end
     end
 
     if not playerActionReady then
-        local commState = emu:read8(ADDR_BATTLE_COMMUNICATION_0)
-        if commState > STATE_WAIT_ACTION_CASE_CHOSEN and lastPlayerCommState <= STATE_WAIT_ACTION_CASE_CHOSEN then
+        if not player1Battler0Ready then
+            local commState = emu:read8(ADDR_BATTLE_COMMUNICATION_0)
+            if commState > STATE_WAIT_ACTION_CASE_CHOSEN and lastPlayerCommState <= STATE_WAIT_ACTION_CASE_CHOSEN then
+                player1Battler0Ready = true
+            end
+            lastPlayerCommState = commState
+        end
+        if isDoubleBattle() and not player1Battler2Ready then
+            local commState2 = emu:read8(battlerCommAddr(2))
+            if commState2 > STATE_WAIT_ACTION_CASE_CHOSEN and lastPlayerCommState2 <= STATE_WAIT_ACTION_CASE_CHOSEN then
+                player1Battler2Ready = true
+            end
+            lastPlayerCommState2 = commState2
+        end
+        if player1Battler0Ready and (player1Battler2Ready or not isDoubleBattle()) then
             playerActionReady = true
         end
-        lastPlayerCommState = commState
     end
 
-    if pendingAction == nil then
+    if pendingAction[battler] == nil then
         if playerActionReady and not battleMessageShown then
             battleMessageShown = true
             showBattleMessage("Waiting for " .. player2Name .. "'s move...")
@@ -796,24 +989,44 @@ local function onOpponentHandleChooseAction()
             emu:writeRegister("pc", lr)
         end
     else
-        if pendingAction.action == "switch" then
+        if pendingAction[battler].action == "switch" then
             -- The AI's own switch path never writes the action byte the game expects here, so we
             -- write it ourselves -- otherwise the engine hangs waiting for it.
-            emu:write8(ADDR_GBATTLE_BUFFER_B1 + 1, B_ACTION_SWITCH)
-            voluntarySwitchSlot = pendingAction.partySlot
+            emu:write8(battlerBufferBase(battler) + 1, B_ACTION_SWITCH)
+            voluntarySwitchSlot[battler] = pendingAction[battler].partySlot
         end
-        steeringArmed = true
-        awaitingAction = false
+        steeringArmed[battler] = true
+        awaitingAction[battler] = false
     end
 end
 
--- How many other enemy party members are still alive. With fewer than 2, there's no real choice
--- to make (one option, or the battle's over), so it's not worth prompting Player 2 for it.
-local function countAliveNonActiveEnemyMons()
-    local activeSlot = emu:read16(ADDR_ENEMY_PARTY_INDEX)
+-- How many of `battler`'s own trainer's party members are still alive and not already active
+-- (both 1 and 3's own active slots are excluded, even though only one of them belongs to
+-- `battler`'s own team -- harmless, since the other one isn't in `battler`'s half anyway). With
+-- fewer than 2, there's no real choice to make (one option, or the battle's over), so it's not
+-- worth prompting Player 2 for it. Restricted to `battler`'s own half of gEnemyParty in a double
+-- battle, same split as buildPartyJSON -- otherwise this would count the OTHER trainer's bench
+-- mons as valid replacements for a battler that can't actually switch into them. Uses
+-- findActivePartySlot's personality-based matching (already proven battler-generic) rather than
+-- ADDR_ENEMY_PARTY_INDEX, since that address's battler-3 equivalent hasn't been live-verified --
+-- this sidesteps needing it at all.
+local function countAliveNonActiveEnemyMons(battler)
+    local activeSlots = {}
+    local _, _, _, _, _, personality1 = readActiveMon(battlerMonBase(1))
+    activeSlots[findActivePartySlot(ADDR_GENEMY_PARTY, personality1)] = true
+    local startSlot, endSlot = 0, PARTY_SIZE - 1
+    if isDoubleBattle() then
+        local _, _, _, _, _, personality3 = readActiveMon(battlerMonBase(3))
+        activeSlots[findActivePartySlot(ADDR_GENEMY_PARTY, personality3)] = true
+        if battler == 1 then
+            startSlot, endSlot = 0, PARTY_SIZE / 2 - 1
+        elseif battler == 3 then
+            startSlot, endSlot = PARTY_SIZE / 2, PARTY_SIZE - 1
+        end
+    end
     local count = 0
-    for i = 0, PARTY_SIZE - 1 do
-        if i ~= activeSlot then
+    for i = startSlot, endSlot do
+        if not activeSlots[i] then
             local species, hp = readPartyMon(ADDR_GENEMY_PARTY + i * PARTY_MON_SIZE)
             if species ~= 0 and hp > 0 then
                 count = count + 1
@@ -823,51 +1036,54 @@ local function countAliveNonActiveEnemyMons()
     return count
 end
 
--- Holds an unprompted "choose a replacement" call (i.e. the enemy's mon just fainted) until
--- Player 2 answers. Left alone if this is actually the follow-through of a voluntary switch
--- (already handled above) or we're already mid-hold elsewhere.
+-- Holds an unprompted "choose a replacement" call (i.e. an enemy battler's mon just fainted)
+-- until Player 2 answers for that battler. Left alone if this is actually the follow-through of a
+-- voluntary switch (already handled above) or we're already mid-hold elsewhere for this battler.
 local function onOpponentHandleChoosePokemon()
     if not isControllableBattle() then
-        awaitingReplacement = false
+        awaitingReplacement = {}
         return
     end
 
-    if voluntarySwitchSlot ~= nil then
-        local slot = voluntarySwitchSlot
-        voluntarySwitchSlot = nil
-        pendingAction = { action = "switch", partySlot = slot }
-        steeringArmed = true
+    local battler = emu:read8(ADDR_ACTIVE_BATTLER)
+
+    if voluntarySwitchSlot[battler] ~= nil then
+        local slot = voluntarySwitchSlot[battler]
+        voluntarySwitchSlot[battler] = nil
+        pendingAction[battler] = { action = "switch", partySlot = slot }
+        steeringArmed[battler] = true
         return
     end
-    if steeringArmed or awaitingAction then
+    if steeringArmed[battler] or awaitingAction[battler] then
         return
     end
-    if countAliveNonActiveEnemyMons() < 2 then
-        awaitingReplacement = false
+    if countAliveNonActiveEnemyMons(battler) < 2 then
+        awaitingReplacement[battler] = false
         return
     end
 
-    if not awaitingReplacement then
-        awaitingReplacement = true
-        pendingAction = nil
-        console:log("[client] enemy's mon fainted, notifying Player 2 for a replacement (waiting...)")
-        sendJSON(extractEnemyState("battle_state", true))
+    if not awaitingReplacement[battler] then
+        awaitingReplacement[battler] = true
+        pendingAction[battler] = nil
+        console:log("[client] enemy battler " .. battler .. "'s mon fainted, notifying Player 2 for a replacement (waiting...)")
+        sendJSON(extractEnemyState("battle_state", battler, true))
         showBattleMessage("Waiting for " .. player2Name .. " to pick a replacement...")
         return
     end
 
-    if pendingAction == nil then
+    if pendingAction[battler] == nil then
         local lr = emu:readRegister("lr")
         emu:writeRegister("pc", lr)
     else
-        steeringArmed = true
-        awaitingReplacement = false
+        steeringArmed[battler] = true
+        awaitingReplacement[battler] = false
     end
 end
 
 local function onShouldSwitch()
-    if not steeringArmed then return end
-    if pendingAction and pendingAction.action == "switch" then
+    local battler = emu:read8(ADDR_ACTIVE_BATTLER)
+    if not steeringArmed[battler] then return end
+    if pendingAction[battler] and pendingAction[battler].action == "switch" then
         emu:writeRegister("r0", 1)
     else
         emu:writeRegister("r0", 0)
@@ -877,15 +1093,16 @@ local function onShouldSwitch()
 end
 
 local function onGetMostSuitableMon()
-    if not steeringArmed then return end
-    if pendingAction and pendingAction.action == "switch" and pendingAction.partySlot ~= nil then
-        emu:writeRegister("r0", pendingAction.partySlot)
+    local battler = emu:read8(ADDR_ACTIVE_BATTLER)
+    if not steeringArmed[battler] then return end
+    if pendingAction[battler] and pendingAction[battler].action == "switch" and pendingAction[battler].partySlot ~= nil then
+        emu:writeRegister("r0", pendingAction[battler].partySlot)
         local lr = emu:readRegister("lr")
         emu:writeRegister("pc", lr)
     end
-    steeringArmed = false
-    pendingAction = nil
-    player2Committed = true
+    steeringArmed[battler] = false
+    pendingAction[battler] = nil
+    player2Committed[battler] = true
     flushPendingPlayerLogEntries()
 end
 
@@ -893,13 +1110,17 @@ end
 -- ShouldUseItem()'s own "use item" side effects (see ITEM_AI_CLASSIFICATION above for why we
 -- can't just let the real function decide). Denies (same as before item support existed) whenever
 -- Player 2 chose a move or switch instead, so the AI can't sneak in an item use of its own.
+-- Battler 3 is always denied for now -- see ADDR_CHOSEN_ITEM's comment, item support isn't
+-- extended there yet (needs gTrainerBattleOpponent_B, not yet discovered).
 local function onShouldUseItem()
-    if not steeringArmed then return end
+    local battler = emu:read8(ADDR_ACTIVE_BATTLER)
+    if not steeringArmed[battler] then return end
 
-    if pendingAction and pendingAction.action == "item" and pendingAction.itemId then
-        local classification = ITEM_AI_CLASSIFICATION[pendingAction.itemId]
+    if battler == 1 and pendingAction[battler] and pendingAction[battler].action == "item" and pendingAction[battler].itemId then
+        local itemId = pendingAction[battler].itemId
+        local classification = ITEM_AI_CLASSIFICATION[itemId]
         if classification then
-            emu:write8(ADDR_CHOSEN_ITEM, pendingAction.itemId)
+            emu:write8(ADDR_CHOSEN_ITEM, itemId)
             emu:write8(ADDR_AI_ITEM_TYPE, classification.itemType)
             emu:write8(ADDR_AI_ITEM_FLAGS, classification.itemFlags or 0)
             emu:write8(ADDR_GBATTLE_BUFFER_B1, CONTROLLER_TWORETURNVALUES)
@@ -908,15 +1129,15 @@ local function onShouldUseItem()
             local lr = emu:readRegister("lr")
             emu:writeRegister("pc", lr)
 
-            console:log("[client] injected item " .. pendingAction.itemId)
-            usedItemCounts[pendingAction.itemId] = (usedItemCounts[pendingAction.itemId] or 0) + 1
-            pendingAction = nil
-            steeringArmed = false
-            player2Committed = true
+            console:log("[client] injected item " .. itemId)
+            usedItemCounts[1][itemId] = (usedItemCounts[1][itemId] or 0) + 1
+            pendingAction[battler] = nil
+            steeringArmed[battler] = false
+            player2Committed[battler] = true
             flushPendingPlayerLogEntries()
             return
         end
-        console:error("[client] no AI classification for item " .. pendingAction.itemId .. " -- denying")
+        console:error("[client] no AI classification for item " .. itemId .. " -- denying")
     end
 
     emu:writeRegister("r0", 0)
@@ -924,46 +1145,65 @@ local function onShouldUseItem()
     emu:writeRegister("pc", lr)
 end
 
--- Injects Player 2's already-decided move once the game reaches the point where it expects one.
-local function onHandleTurnActionSelection()
-    if not isControllableBattle() then return end
-    if not (pendingAction and pendingAction.action == "move") then return end
+-- Injects Player 2's already-decided move for `battler` once its own buffer reaches the point
+-- where the game expects one. Deliberately does NOT gate on gActiveBattler -- this breakpoint
+-- fires every single frame (confirmed), not once per battler decision like the AI decision
+-- functions do, so gActiveBattler isn't reliably `battler` at the exact frame this battler's
+-- buffer happens to become ready (it drifts as other engine code touches it for unrelated
+-- reasons). Checking the buffer's own state directly instead is what the original singles-only
+-- version already did, correctly -- gating on gActiveBattler here was the doubles regression that
+-- broke singles (a move could miss its injection window and silently fall back to whatever the
+-- AI had already picked).
+local function tryInjectMoveForBattler(battler)
+    if not (pendingAction[battler] and pendingAction[battler].action == "move") then return end
 
-    local enemyState = emu:read8(ADDR_BATTLE_COMMUNICATION_1)
-    local header = emu:read8(ADDR_GBATTLE_BUFFER_B1)
-    local action = emu:read8(ADDR_GBATTLE_BUFFER_B1 + 1)
+    local commAddr = battlerCommAddr(battler)
+    local bufferBase = battlerBufferBase(battler)
+    local enemyState = emu:read8(commAddr)
+    local header = emu:read8(bufferBase)
+    local action = emu:read8(bufferBase + 1)
 
     local enemyDecisionPending = (enemyState == STATE_WAIT_ACTION_CASE_CHOSEN
         and header == CONTROLLER_TWORETURNVALUES and action == B_ACTION_EXEC_SCRIPT)
 
-    if enemyDecisionPending then
-        local moveIndex = pendingAction.moveIndex
-        emu:write8(ADDR_GBATTLE_BUFFER_B1 + 2, moveIndex) -- move slot
-        emu:write8(ADDR_GBATTLE_BUFFER_B1 + 3, PLAYER_BATTLER_INDEX)   -- target
-        console:log("[client] injected move " .. moveIndex)
-        pendingAction = nil
-        player2Committed = true
-        flushPendingPlayerLogEntries()
+    if not enemyDecisionPending then return end
 
-        -- Log Player 2's move directly, using the move slot we just injected, rather than
-        -- through the same gBattleCommunication-based edge-detection used for Player 1. That
-        -- detector can fire for reasons unrelated to a genuine decision (e.g. during battle
-        -- setup), which read whatever gChosenMoveByBattler[1] happened to still hold from a
-        -- previous battle and logged it as if it just happened.
-        local moveId = emu:read16(ADDR_ENEMY_MOVES + moveIndex * 2)
-        local species = emu:read16(ADDR_ENEMY_ACTIVE + 0x00)
-        queueMoveLog(1, moveId, species)
+    local moveIndex = pendingAction[battler].moveIndex
+    local target = pendingAction[battler].target or PLAYER_BATTLER_INDEX
+    emu:write8(bufferBase + 2, moveIndex) -- move slot
+    emu:write8(bufferBase + 3, target)
+    console:log("[client] injected battler " .. battler .. " move " .. moveIndex)
+    pendingAction[battler] = nil
+    player2Committed[battler] = true
+    flushPendingPlayerLogEntries()
+
+    -- Log Player 2's move directly, using the move slot we just injected, rather than through the
+    -- same gBattleCommunication-based edge-detection used for Player 1. That detector can fire for
+    -- reasons unrelated to a genuine decision (e.g. during battle setup), which read whatever
+    -- gChosenMoveByBattler[battler] happened to still hold from a previous battle and logged it as
+    -- if it just happened.
+    local moveId = emu:read16(battlerMovesBase(battler) + moveIndex * 2)
+    local species = emu:read16(battlerMonBase(battler))
+    queueMoveLog(battler, moveId, species)
+end
+
+local function onHandleTurnActionSelection()
+    if not isControllableBattle() then return end
+    tryInjectMoveForBattler(1)
+    if isDoubleBattle() then
+        tryInjectMoveForBattler(3)
     end
 end
 
 local wasInBattle = false
 local heartbeatCounter = 0
 
--- Battle log: tracks each battler's move/switch decisions and sends them to the browser. Player
--- 1's entries are held back until Player 2 has committed their own choice for the turn, so
--- Player 2 can't see Player 1's move before answering.
-local lastCommState = { [0] = 0, [1] = 0 }
-local lastBattlerPersonality = { [0] = -1, [1] = -1 }
+-- Battle log: tracks each of the 4 battlers' move/switch decisions and sends them to the browser.
+-- Player 1's entries (battlers 0/2) are held back until Player 2 has committed every enemy
+-- battler's choice for the turn, so Player 2 can't see Player 1's move before answering. Real
+-- values seeded by resetBattleLog() on battle start.
+local lastCommState = {}
+local lastBattlerPersonality = {}
 
 flushPendingPlayerLogEntries = function()
     for _, jsonLine in ipairs(pendingPlayerLogEntries) do
@@ -975,21 +1215,20 @@ end
 local function logMove(battler)
     local moveId = emu:read16(ADDR_CHOSEN_MOVE_BY_BATTLER + battler * 2)
     if moveId == 0 then return end
-    local base = (battler == 0) and ADDR_PLAYER_ACTIVE or ADDR_ENEMY_ACTIVE
-    local species = emu:read16(base + 0x00)
+    local species = emu:read16(battlerMonBase(battler) + 0x00)
     queueMoveLog(battler, moveId, species)
 end
 
--- Player 1's moves are detected here (we don't control their input, only observe it). Player
--- 2's moves are logged directly at the moment we inject them (see onHandleTurnActionSelection)
--- instead -- this same gBattleCommunication-based detection can cross its threshold for reasons
--- unrelated to a genuine decision (e.g. during battle setup), which produced false log entries
--- from whatever gChosenMoveByBattler[1] happened to still hold from a previous battle.
+-- Player 1's moves are detected here (we don't control their input, only observe it), for both of
+-- their own battlers (0, and 2 in a double battle). Player 2's moves are logged directly at the
+-- moment we inject them (see onHandleTurnActionSelection) instead -- this same
+-- gBattleCommunication-based detection can cross its threshold for reasons unrelated to a genuine
+-- decision (e.g. during battle setup), which produced false log entries from whatever
+-- gChosenMoveByBattler[battler] happened to still hold from a previous battle.
 local function checkBattleLog()
-    do
-        local battler = 0
-        local commState = emu:read8(ADDR_BATTLE_COMMUNICATION_0)
-        if commState > STATE_WAIT_ACTION_CASE_CHOSEN and lastCommState[battler] <= STATE_WAIT_ACTION_CASE_CHOSEN then
+    for _, battler in ipairs({ 0, 2 }) do
+        local commState = emu:read8(battlerCommAddr(battler))
+        if commState > STATE_WAIT_ACTION_CASE_CHOSEN and (lastCommState[battler] or 0) <= STATE_WAIT_ACTION_CASE_CHOSEN then
             local action = emu:read8(ADDR_CHOSEN_ACTION_BY_BATTLER + battler)
             if action == B_ACTION_USE_MOVE then
                 logMove(battler)
@@ -1000,15 +1239,17 @@ local function checkBattleLog()
         lastCommState[battler] = commState
     end
 
-    -- Switches are detected via gBattleMons's personality actually changing
-    for battler = 0, 1 do
-        local base = (battler == 0) and ADDR_PLAYER_ACTIVE or ADDR_ENEMY_ACTIVE
+    -- Switches are detected via gBattleMons's personality actually changing. All 4 battler slots
+    -- are checked unconditionally (harmless in a single battle -- battlers 2/3 just hold static,
+    -- unchanging data there, so their personality/HP never actually differs from the first read).
+    for battler = 0, 3 do
+        local base = battlerMonBase(battler)
         local species = emu:read16(base + 0x00)
         local personality = emu:read32(base + 0x48)
         local hp = emu:read16(base + 0x28)
 
-        if personality ~= lastBattlerPersonality[battler] then
-            local wasFirstRead = lastBattlerPersonality[battler] == -1
+        if personality ~= (lastBattlerPersonality[battler] or -1) then
+            local wasFirstRead = lastBattlerPersonality[battler] == nil
             lastBattlerPersonality[battler] = personality
             -- The switched-in mon's full HP must not be misread next frame as "took damage" --
             -- reset this battler's HP baseline too.
@@ -1020,14 +1261,22 @@ local function checkBattleLog()
             end
         elseif hp ~= lastMoveLogHp[battler] then
             local previousHp = lastMoveLogHp[battler]
-            local wasFirstRead = previousHp == -1
+            local wasFirstRead = previousHp == nil
             lastMoveLogHp[battler] = hp
             if not wasFirstRead then
-                local opponent = (battler == 0) and 1 or 0
-                -- Usually positive (damage taken). Can be negative if `battler` is actually the
-                -- attacker healing itself via a draining move rather than the target -- see
-                -- flushMoveLog()'s comment on how that's displayed.
-                flushMoveLog(opponent, previousHp - hp)
+                -- currentlyResolvingBattler (set from gActiveBattler the moment battle text says
+                -- "X used Y!" -- confirmed live to exactly match the real attacker, 0-3, no
+                -- ambiguity even between two same-named mons) tells us WHO to credit this HP
+                -- change to. A move with no attributable attacker (e.g. end-of-turn poison
+                -- damage, no move currently resolving) is correctly left unattributed. Only
+                -- accumulated here, not flushed -- a multi-hit move like Double Kick fires several
+                -- of these HP changes for the same still-resolving move, and flushing (sending the
+                -- JSON) happens once resolution is actually confirmed done: the next "X used Y!"
+                -- for any battler, a miss, or the turn-boundary safety net (see
+                -- onBattlePutTextOnWindow / onOpponentHandleChooseAction).
+                if currentlyResolvingBattler ~= nil then
+                    accumulateMoveLogDamage(currentlyResolvingBattler, previousHp - hp)
+                end
                 if hp == 0 then
                     discardMoveLog(battler)
                 end
@@ -1041,17 +1290,20 @@ local function resetBattleLog()
     -- gChosenActionByBattler never get cleared between battles, so a fake low baseline makes
     -- the very first check see a false "just happened" transition into that stale leftover data.
     lastCommState = {
-        [0] = emu:read8(ADDR_BATTLE_COMMUNICATION_0),
-        [1] = emu:read8(ADDR_BATTLE_COMMUNICATION_1),
+        [0] = emu:read8(battlerCommAddr(0)),
+        [1] = emu:read8(battlerCommAddr(1)),
+        [2] = emu:read8(battlerCommAddr(2)),
+        [3] = emu:read8(battlerCommAddr(3)),
     }
-    lastBattlerPersonality = { [0] = -1, [1] = -1 }
-    pendingMoveLog = { [0] = nil, [1] = nil }
-    lastMoveLogHp = { [0] = -1, [1] = -1 }
-    player2Committed = false
+    lastBattlerPersonality = {}
+    pendingMoveLog = {}
+    lastMoveLogHp = {}
+    currentlyResolvingBattler = nil
+    player2Committed = {}
     pendingPlayerLogEntries = {}
-    awaitingReplacement = false
-    voluntarySwitchSlot = nil
-    usedItemCounts = {}
+    awaitingReplacement = {}
+    voluntarySwitchSlot = {}
+    usedItemCounts = { [1] = {} }
 end
 
 local reconnectCounter = 0
@@ -1078,7 +1330,10 @@ local function onFrame()
         heartbeatCounter = heartbeatCounter + 1
         if heartbeatCounter >= HEARTBEAT_INTERVAL_FRAMES then
             heartbeatCounter = 0
-            sendJSON(extractEnemyState("battle_update"))
+            sendJSON(extractEnemyState("battle_update", 1))
+            if isDoubleBattle() then
+                sendJSON(extractEnemyState("battle_update", 3))
+            end
         end
     elseif wasInBattle then
         console:log("[client] battle ended, notifying Player 2")

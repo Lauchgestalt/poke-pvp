@@ -29,7 +29,9 @@ class BattleConnection {
 	status = $state('connecting...');
 	connected = $state(false);
 	battleState = $state<BattleState | null>(null);
+	battleState3 = $state<BattleState | null>(null);
 	submitted = $state(false);
+	submitted3 = $state(false);
 	log = $state<string[]>([]);
 	playerName = $state<string | null>(null);
 	myName = $state<string | null>(
@@ -92,18 +94,26 @@ class BattleConnection {
 			}
 			if (isBattleStarted(msg)) {
 				this.log = [];
+				this.battleState3 = null;
 				if (this.frameObjectUrl) URL.revokeObjectURL(this.frameObjectUrl);
 				this.frameObjectUrl = null;
 				this.latestFrameUrl = null;
 			} else if (isBattleEnded(msg)) {
 				this.battleState = null;
+				this.battleState3 = null;
 				this.submitted = false;
+				this.submitted3 = false;
 				this.log = [];
 				this.status = 'connected -- waiting for a battle...';
 			} else if (isBattleState(msg)) {
-				this.battleState = msg;
+				if (msg.battlerSlot === 3) {
+					this.battleState3 = msg;
+					if (msg.type === 'battle_state') this.submitted3 = false;
+				} else {
+					this.battleState = msg;
+					if (msg.type === 'battle_state') this.submitted = false;
+				}
 				if (msg.type === 'battle_state') {
-					this.submitted = false;
 					this.status = msg.mustSwitch
 						? 'your Pokemon fainted -- choose a replacement'
 						: 'your turn -- pick a move, or switch below';
@@ -127,21 +137,24 @@ class BattleConnection {
 		this.ws.send(JSON.stringify(msg));
 	}
 
-	chooseMove(moveIndex: number) {
-		this.send({ type: 'action_choice', action: 'move', moveIndex });
-		this.submitted = true;
+	chooseMove(moveIndex: number, battlerSlot: 1 | 3 = 1, target?: 0 | 2) {
+		this.send({ type: 'action_choice', battlerSlot, action: 'move', moveIndex, target });
+		if (battlerSlot === 3) this.submitted3 = true;
+		else this.submitted = true;
 		this.status = `sent move ${moveIndex}, waiting for next turn...`;
 	}
 
-	chooseSwitch(partySlot: number) {
-		this.send({ type: 'action_choice', action: 'switch', partySlot });
-		this.submitted = true;
+	chooseSwitch(partySlot: number, battlerSlot: 1 | 3 = 1) {
+		this.send({ type: 'action_choice', battlerSlot, action: 'switch', partySlot });
+		if (battlerSlot === 3) this.submitted3 = true;
+		else this.submitted = true;
 		this.status = `sent switch to slot ${partySlot}, waiting for next turn...`;
 	}
 
-	chooseItem(itemId: number) {
-		this.send({ type: 'action_choice', action: 'item', itemId });
-		this.submitted = true;
+	chooseItem(itemId: number, battlerSlot: 1 | 3 = 1) {
+		this.send({ type: 'action_choice', battlerSlot, action: 'item', itemId });
+		if (battlerSlot === 3) this.submitted3 = true;
+		else this.submitted = true;
 		this.status = `sent item choice, waiting for next turn...`;
 	}
 
@@ -182,7 +195,9 @@ class BattleConnection {
 	}
 
 	private formatLogEntry(msg: BattleLog): string {
-		const who = msg.battler === 0 ? (this.playerName ?? 'Player 1') : (this.myName ?? 'Player 2');
+		const isPlayerOne = msg.battler === 0 || msg.battler === 2;
+		const baseName = isPlayerOne ? (this.playerName ?? 'Player 1') : (this.myName ?? 'Player 2');
+		const who = msg.battler === 2 || msg.battler === 3 ? `${baseName} (right)` : baseName;
 		const species = SPECIES_NAMES[msg.speciesId] ?? `Species #${msg.speciesId}`;
 		if (msg.event === 'move') {
 			const name = MOVE_NAMES[msg.moveId] ?? `Move #${msg.moveId}`;

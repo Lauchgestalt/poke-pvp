@@ -13,11 +13,13 @@ export interface PartyMon extends ActiveMon {
 
 export interface BattleState {
 	type: 'battle_state' | 'battle_update';
+	battlerSlot: 1 | 3;
 	mustSwitch: boolean;
 	enemyMoveIds: number[];
 	pp: number[];
 	enemyActive: ActiveMon;
 	playerActive: ActiveMon;
+	playerActive2: ActiveMon | null;
 	enemyActivePartySlot: number;
 	enemyParty: PartyMon[];
 	availableItems: { itemId: number; count: number }[];
@@ -36,22 +38,30 @@ export interface PlayerInfo {
 	name: string;
 }
 
+export type Battler = 0 | 1 | 2 | 3;
+
 export type BattleLog =
 	| {
 			type: 'battle_log';
-			battler: 0 | 1;
+			battler: Battler;
 			event: 'move';
 			moveId: number;
 			speciesId: number;
 			damage?: number;
 			missed?: boolean;
 	  }
-	| { type: 'battle_log'; battler: 0 | 1; event: 'switch'; speciesId: number };
+	| { type: 'battle_log'; battler: Battler; event: 'switch'; speciesId: number };
 
 export type ActionChoice =
-	| { type: 'action_choice'; action: 'move'; moveIndex: number }
-	| { type: 'action_choice'; action: 'switch'; partySlot: number }
-	| { type: 'action_choice'; action: 'item'; itemId: number };
+	| {
+			type: 'action_choice';
+			battlerSlot: 1 | 3;
+			action: 'move';
+			moveIndex: number;
+			target?: 0 | 2;
+	  }
+	| { type: 'action_choice'; battlerSlot: 1 | 3; action: 'switch'; partySlot: number }
+	| { type: 'action_choice'; battlerSlot: 1 | 3; action: 'item'; itemId: number };
 
 export interface SetPlayer2Name {
 	type: 'set_player2_name';

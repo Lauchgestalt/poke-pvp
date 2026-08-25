@@ -16,7 +16,7 @@
 			class="relative w-full max-w-5xl overflow-hidden rounded-xl border-4 border-slate-900 bg-black shadow-2xl"
 		>
 			<div
-				class="pointer-events-none absolute inset-0 z-10 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.3)_50%)] bg-size-[100%_4px] shadow-[inset_0_0_60px_rgba(0,0,0,0.8)]"
+				class="pointer-events-none absolute inset-0 z-10 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.2)_50%)] bg-size-[100%_4px] shadow-[inset_0_0_60px_rgba(0,0,0,0.5)]"
 			></div>
 
 			<div

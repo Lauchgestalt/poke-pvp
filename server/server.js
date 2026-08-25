@@ -82,7 +82,6 @@ const tcpServer = net.createServer((socket) => {
         continue;
       }
 
-      console.log('[relay] from emulator:', line);
       if (line.includes('"type":"player_info"')) {
         lastPlayerInfoLine = line;
       }
