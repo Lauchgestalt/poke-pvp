@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { SPECIES_NAMES } from '$lib/data/speciesNames';
 	import { MOVE_NAMES } from '$lib/data/moveNames';
+	import { MOVE_TYPES } from '$lib/data/moveTypes';
+	import { typeColor } from '$lib/data/typeColors';
 	import PokemonSprite from './PokemonSprite.svelte';
+	import Tooltip from './Tooltip.svelte';
 	import type { PartyMon } from '$lib/types';
 
 	let {
@@ -19,11 +22,6 @@
 	const speciesName = (id: number) => SPECIES_NAMES[id] ?? `Species #${id}`;
 	const displayName = (mon: PartyMon) =>
 		mon.nickname && mon.nickname.trim() !== '' ? mon.nickname : speciesName(mon.species);
-	const moveTitle = (mon: PartyMon) =>
-		mon.moveIds
-			.map((id, i) => (id > 0 ? `${MOVE_NAMES[id] ?? `Move #${id}`} (${mon.pp[i]} PP)` : null))
-			.filter(Boolean)
-			.join('\n') || 'No moves known';
 </script>
 
 <div
@@ -48,71 +46,97 @@
 				{@const hpBarClass =
 					pct <= 20 ? 'bg-red-500' : pct <= 50 ? 'bg-amber-400' : 'bg-emerald-500'}
 
-				<button
-					class="group relative flex w-full cursor-pointer items-center gap-3 rounded-xl border p-2.5 text-left transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50 {isActive
-						? 'border-emerald-500/60 bg-emerald-950/30 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
-						: fainted
-							? 'border-red-900/30 bg-slate-950/40 grayscale'
-							: 'border-slate-800/90 bg-slate-950/60 hover:border-slate-700 hover:bg-slate-800/50'}"
-					disabled={disabled || isActive || fainted}
-					onclick={() => onSwitch(mon.partySlot)}
-					title={moveTitle(mon)}
-				>
-					<div
-						class="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/80"
-					>
-						<PokemonSprite
-							species={mon.species}
-							alt={speciesName(mon.species)}
-							class="h-10 w-10 object-contain transition-transform group-hover:scale-110"
-						/>
-					</div>
-
-					<div class="min-w-0 flex-1">
-						<div class="flex items-center justify-between gap-1.5">
-							<span class="flex min-w-0 items-baseline gap-1">
-								<span class="truncate text-sm font-extrabold tracking-tight text-white">
-									{displayName(mon)}
-								</span>
-								{#if mon.gender === 'male'}
-									<span class="text-xs font-bold text-blue-400">♂</span>
-								{:else if mon.gender === 'female'}
-									<span class="text-xs font-bold text-pink-400">♀</span>
-								{/if}
-							</span>
-
-							{#if isActive}
-								<span
-									class="shrink-0 rounded border border-emerald-500/30 bg-emerald-500/20 px-1.5 py-0.5 font-mono text-[9px] font-black tracking-wider text-emerald-400"
-								>
-									ACTIVE
-								</span>
-							{:else if fainted}
-								<span
-									class="shrink-0 rounded border border-red-800/40 bg-red-950/60 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider text-red-400"
-								>
-									FAINTED
-								</span>
-							{/if}
-						</div>
-
-						<div
-							class="mt-1.5 h-2 w-full overflow-hidden rounded-full border border-slate-800/80 bg-slate-950 p-0.5"
+				<Tooltip>
+					{#snippet children()}
+						<button
+							class="group relative flex w-full cursor-pointer items-center gap-3 rounded-xl border p-2.5 text-left transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50 {isActive
+								? 'border-emerald-500/60 bg-emerald-950/30 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
+								: fainted
+									? 'border-red-900/30 bg-slate-950/40 grayscale'
+									: 'border-slate-800/90 bg-slate-950/60 hover:border-slate-700 hover:bg-slate-800/50'}"
+							disabled={disabled || isActive || fainted}
+							onclick={() => onSwitch(mon.partySlot)}
 						>
 							<div
-								class="h-full rounded-full transition-all duration-300 {hpBarClass}"
-								style="width: {pct}%"
-							></div>
-						</div>
+								class="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/80"
+							>
+								<PokemonSprite
+									species={mon.species}
+									alt={speciesName(mon.species)}
+									class="h-10 w-10 object-contain transition-transform group-hover:scale-110"
+								/>
+							</div>
 
-						<div
-							class="mt-1 flex items-center justify-between font-mono text-[10px] text-slate-400"
-						>
-							<span>HP</span>
-							<span class="font-bold text-slate-300">{mon.hp}/{mon.maxHp}</span>
+							<div class="min-w-0 flex-1">
+								<div class="flex items-center justify-between gap-1.5">
+									<span class="flex min-w-0 items-baseline gap-1">
+										<span class="truncate text-sm font-extrabold tracking-tight text-white">
+											{displayName(mon)}
+										</span>
+										{#if mon.gender === 'male'}
+											<span class="text-xs font-bold text-blue-400">♂</span>
+										{:else if mon.gender === 'female'}
+											<span class="text-xs font-bold text-pink-400">♀</span>
+										{/if}
+									</span>
+
+									{#if isActive}
+										<span
+											class="shrink-0 rounded border border-emerald-500/30 bg-emerald-500/20 px-1.5 py-0.5 font-mono text-[9px] font-black tracking-wider text-emerald-400"
+										>
+											ACTIVE
+										</span>
+									{:else if fainted}
+										<span
+											class="shrink-0 rounded border border-red-800/40 bg-red-950/60 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider text-red-400"
+										>
+											FAINTED
+										</span>
+									{/if}
+								</div>
+
+								<div
+									class="mt-1.5 h-2 w-full overflow-hidden rounded-full border border-slate-800/80 bg-slate-950 p-0.5"
+								>
+									<div
+										class="h-full rounded-full transition-all duration-300 {hpBarClass}"
+										style="width: {pct}%"
+									></div>
+								</div>
+
+								<div
+									class="mt-1 flex items-center justify-between font-mono text-[10px] text-slate-400"
+								>
+									<span>HP</span>
+									<span class="font-bold text-slate-300">{mon.hp}/{mon.maxHp}</span>
+								</div>
+							</div>
+						</button>
+					{/snippet}
+					{#snippet tooltip()}
+						<div class="space-y-1.5">
+							{#each mon.moveIds as moveId, i (i)}
+								{#if moveId > 0}
+									<div class="flex items-center gap-2">
+										<span
+											class="inline-flex w-14 shrink-0 justify-center rounded-md px-1.5 py-0.5 text-center font-mono text-[9px] font-black tracking-wider text-slate-950 uppercase"
+											style="background-color: {typeColor(MOVE_TYPES[moveId] ?? 'Normal')};"
+										>
+											{MOVE_TYPES[moveId] ?? 'Normal'}
+										</span>
+										<span class="flex-1 text-xs font-bold text-white"
+											>{MOVE_NAMES[moveId] ?? `Move #${moveId}`}</span
+										>
+										<span class="font-mono text-[10px] text-slate-400">{mon.pp[i]} PP</span>
+									</div>
+								{/if}
+							{/each}
+							{#if mon.moveIds.every((id) => id <= 0)}
+								<div class="text-xs text-slate-500 italic">No moves known</div>
+							{/if}
 						</div>
-					</div>
-				</button>
+					{/snippet}
+				</Tooltip>
 			{/each}
 		</div>
 	{/if}

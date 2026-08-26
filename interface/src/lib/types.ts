@@ -52,6 +52,7 @@ export type BattleLog =
 			speciesId: number;
 			damage?: number;
 			missed?: boolean;
+			noEffect?: boolean;
 	  }
 	| { type: 'battle_log'; battler: Battler; event: 'switch'; speciesId: number }
 	| { type: 'battle_log'; battler: Battler | null; event: 'text'; text: string };

@@ -19,7 +19,7 @@ export const BATTLE_TRACKS: MusicTrack[] = [
 	{ videoId: 'xVKIuNQcCIE', title: 'Super-Ancient Pokémon Battle' },
 	{ videoId: 'WEO2M2_SvRk', title: 'Trainer Battle' },
 	{ videoId: 'DR06tQIFz5w', title: 'Team Aqua/Magma Battle' },
-	{ videoId: 'e0zs9M-ITh0', title: 'Wild Pokémon Battle' },
+	{ videoId: 'e0zs9M-ITh0', title: 'Wild Pokémon Battle' }
 ];
 
 export const OVERWORLD_TRACKS: MusicTrack[] = [
@@ -80,5 +80,5 @@ export const OVERWORLD_TRACKS: MusicTrack[] = [
 	{ videoId: 'Pwlqi_WNUEE', title: "Trainer's School" },
 	{ videoId: 'lyBNH4U2j0A', title: 'Trick House' },
 	{ videoId: 'mr0zRMXjbGE', title: 'Verdanturf Town' },
-	{ videoId: 'wLlPNP4F2Ps', title: 'Victory Road' },
+	{ videoId: 'wLlPNP4F2Ps', title: 'Victory Road' }
 ];

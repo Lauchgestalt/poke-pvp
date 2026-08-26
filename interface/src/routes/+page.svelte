@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { battle } from '$lib/battleConnection.svelte';
 	import { streamSettings } from '$lib/streamSettings.svelte';
+	import { battleSettings } from '$lib/battleSettings.svelte';
 	import { MOVE_NAMES } from '$lib/data/moveNames';
 	import { MOVE_TYPES } from '$lib/data/moveTypes';
 	import { ITEM_NAMES } from '$lib/data/itemNames';
@@ -13,6 +14,7 @@
 	import ItemButton from '$lib/components/ItemButton.svelte';
 	import PartySwitchList from '$lib/components/PartySwitchList.svelte';
 	import BattleLog from '$lib/components/BattleLog.svelte';
+	import OpponentTracker from '$lib/components/OpponentTracker.svelte';
 	import ScreenPreview from '$lib/components/ScreenPreview.svelte';
 	import PokemonSprite from '$lib/components/PokemonSprite.svelte';
 	import type { ActiveMon, BattleState } from '$lib/types';
@@ -20,7 +22,6 @@
 	let activeTab = $state<'battle' | 'stream'>(streamSettings.enabled ? 'stream' : 'battle');
 	let wasInBattle = false;
 
-	let targetFirstMode = $state(false);
 	let target1 = $state<0 | 2>(0);
 	let target3 = $state<0 | 2>(0);
 	let pendingMove1 = $state<number | null>(null);
@@ -182,12 +183,6 @@
 					{@const state = battle.battleState}
 					{#if state.playerActive2}
 						{@const playerActive2 = state.playerActive2}
-						<div class="mx-auto mb-3 flex max-w-5xl items-center justify-end gap-2">
-							<label class="flex cursor-pointer items-center gap-2 text-xs text-slate-400">
-								<input type="checkbox" bind:checked={targetFirstMode} class="accent-emerald-500" />
-								Pick target before move
-							</label>
-						</div>
 						<div class="mx-auto mb-6 grid max-w-5xl grid-cols-1 gap-4 sm:grid-cols-2">
 							<MonCard
 								label={battle.playerName ?? 'Player 1'}
@@ -212,7 +207,7 @@
 									playerId="2"
 								/>
 								<div class="mt-3">
-									{#if targetFirstMode}
+									{#if battleSettings.targetFirstMode}
 										{@render targetPicker(
 											state.playerActive,
 											playerActive2,
@@ -255,7 +250,7 @@
 										playerId="2"
 									/>
 									<div class="mt-3">
-										{#if targetFirstMode}
+										{#if battleSettings.targetFirstMode}
 											{@render targetPicker(
 												state3.playerActive,
 												state3.playerActive2 ?? state3.playerActive,
@@ -313,7 +308,14 @@
 						</div>
 					{/if}
 
-					<div class="mx-auto mt-15 max-w-5xl">
+					<div class="mx-auto mt-4 max-w-5xl">
+						<OpponentTracker
+							mons={[...battle.p1Revealed.values()]}
+							label={`${battle.playerName ?? 'Player 1'}'s revealed team`}
+						/>
+					</div>
+
+					<div class="mx-auto mt-4 max-w-5xl">
 						<BattleLog entries={battle.log} />
 					</div>
 				{:else}

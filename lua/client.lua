@@ -348,10 +348,18 @@ do
 end
 local playerNameSent = false
 
+local GEN3_NEWLINE = 0xFE -- "\n" control code (pret's charmap.txt) -- breaks to the window's next
+-- line without waiting for a button press, unlike \l/\p which pause for input.
+
 local function encodeGen3Bytes(text, maxChars)
     local bytes = {}
     for i = 1, math.min(#text, maxChars) do
-        bytes[i] = GEN3_ENCODE_MAP[text:sub(i, i)] or 0x00 -- unencodable chars fall back to a space
+        local char = text:sub(i, i)
+        -- A literal "\n" in the source string requests a line break in the drawn message, not a
+        -- Gen3-encoded space -- route it to the engine's own newline control byte instead of
+        -- looking it up in GEN3_ENCODE_MAP (which has no entry for it and would draw a space).
+        bytes[i] = char == "\n" and GEN3_NEWLINE or (GEN3_ENCODE_MAP[char] or 0x00) -- unencodable
+        -- chars fall back to a space
     end
     bytes[#bytes + 1] = GEN3_STRING_TERMINATOR
     return bytes
@@ -365,10 +373,39 @@ local ADDR_DISPLAYED_STRING_BATTLE = 0x02022E2C -- gDisplayedStringBattle, scrat
 local ADDR_BATTLE_BG0_X = 0x02022E14
 local ADDR_BATTLE_BG0_Y = 0x02022E16
 local B_WIN_MSG = 0 -- window ID for the main battle message box
-local BATTLE_MESSAGE_MAX_CHARS = 40 -- the window wraps longer text onto a second line itself
+-- Contrary to what this used to assume, jumping straight into BattlePutTextOnWindow does NOT run
+-- the normal word-wrap logic ordinary battle text goes through (AddTextPrinter with a line-length
+-- template) -- text just draws linearly and anything past the window's visible width is clipped,
+-- not wrapped. So we word-wrap ourselves before encoding, breaking with the engine's own \n
+-- control code. BATTLE_MESSAGE_LINE_WIDTH is a conservative per-line character budget (the exact
+-- pixel width varies by character, so this trades a little unused margin for never overflowing).
+local BATTLE_MESSAGE_LINE_WIDTH = 32
+local BATTLE_MESSAGE_MAX_CHARS = 90 -- 2 lines worth + the \n byte, well under gDisplayedStringBattle's size
+
+local function wrapBattleMessage(text)
+    if #text <= BATTLE_MESSAGE_LINE_WIDTH then
+        return text
+    end
+    local breakAt = nil
+    for i = BATTLE_MESSAGE_LINE_WIDTH, 1, -1 do
+        if text:sub(i, i) == " " then
+            breakAt = i
+            break
+        end
+    end
+    local line1, rest
+    if breakAt then
+        line1 = text:sub(1, breakAt - 1)
+        rest = text:sub(breakAt + 1)
+    else
+        line1 = text:sub(1, BATTLE_MESSAGE_LINE_WIDTH)
+        rest = text:sub(BATTLE_MESSAGE_LINE_WIDTH + 1)
+    end
+    return line1 .. "\n" .. rest:sub(1, BATTLE_MESSAGE_LINE_WIDTH)
+end
 
 local function showBattleMessage(text)
-    local bytes = encodeGen3Bytes(text, BATTLE_MESSAGE_MAX_CHARS)
+    local bytes = encodeGen3Bytes(wrapBattleMessage(text), BATTLE_MESSAGE_MAX_CHARS)
     for i, byte in ipairs(bytes) do
         emu:write8(ADDR_DISPLAYED_STRING_BATTLE + i - 1, byte)
     end
@@ -747,19 +784,16 @@ end
 -- "X used Y!" for any battler, battle text confirming a miss, or the safety-net flush in
 -- onOpponentHandleChooseAction -- not on every individual HP change, so a multi-hit move's several
 -- hits all land in the same log entry instead of only the first one being reported.
-local function flushMoveLog(attacker, missed)
+local function flushMoveLog(attacker, missed, noEffect)
     local entry = pendingMoveLog[attacker]
     if not entry then
         return
     end
     pendingMoveLog[attacker] = nil
-    if isPlayerOneBattler(attacker) and not allEnemyBattlersCommitted() then
-        return
-    end
-    local extraField = missed and ',"missed":true' or (entry.damage and string.format(',"damage":%d', entry.damage)) or
-                           ""
-    sendJSON(string.format('{"type":"battle_log","battler":%d,"event":"move","moveId":%d,"speciesId":%d%s}', attacker,
-        entry.moveId, entry.speciesId, extraField))
+    local extraField = missed and ',"missed":true' or noEffect and ',"noEffect":true' or
+                           (entry.damage and string.format(',"damage":%d', entry.damage)) or ""
+    emitBattleLog(attacker, string.format('{"type":"battle_log","battler":%d,"event":"move","moveId":%d,"speciesId":%d%s}',
+        attacker, entry.moveId, entry.speciesId, extraField))
 end
 
 -- Discards battler `battler`'s own still-queued entry
@@ -974,9 +1008,21 @@ local function onBattlePutTextOnWindow()
                 flushMoveLog(currentlyResolvingBattler)
             end
             currentlyResolvingBattler = emu:read8(ADDR_ACTIVE_BATTLER)
+            -- Marks this attacker's queued entry as having actually started executing, so a faint
+            -- later this same turn (see checkBattleLog) knows to flush it instead of discarding it
+            -- as an unstarted "ghost" move.
+            local resolvingEntry = pendingMoveLog[currentlyResolvingBattler]
+            if resolvingEntry then
+                resolvingEntry.started = true
+            end
         elseif text:find("missed", 1, true) and currentlyResolvingBattler ~= nil then
             flushMoveLog(currentlyResolvingBattler, true)
             currentlyResolvingBattler = nil
+        elseif text:find("doesn't affect", 1, true) or text:find("had no effect", 1, true) then
+            if currentlyResolvingBattler ~= nil then
+                flushMoveLog(currentlyResolvingBattler, false, true)
+                currentlyResolvingBattler = nil
+            end
         end
         forwardInterestingBattleText(text)
         substitutePlayer1TrainerName(textAddr)
@@ -1211,7 +1257,7 @@ local function onOpponentHandleChooseAction()
         awaitingReplacement[battler] = false
         voluntarySwitchSlot[battler] = nil
         player2Committed[battler] = false
-        pendingPlayerLogEntries = {}
+        flushPendingPlayerLogEntries()
         -- These are shared across both enemy battlers (the "waiting for your move" message is one
         -- message, not one per battler) -- only reset them when battler 1 starts a fresh turn
         -- cycle, since it's always the first of the two to fire each turn. Resetting them again
@@ -1395,7 +1441,13 @@ local function onGetMostSuitableMon()
     steeringArmed[battler] = false
     pendingAction[battler] = nil
     player2Committed[battler] = true
-    flushPendingPlayerLogEntries()
+    -- Only actually reveal the held-back queue once BOTH enemy battlers have committed (in
+    -- doubles) -- flushPendingPlayerLogEntries() itself sends unconditionally, so calling it the
+    -- moment just ONE of the two battlers commits would show Player 1's move for the OTHER,
+    -- still-undecided battler early.
+    if allEnemyBattlersCommitted() then
+        flushPendingPlayerLogEntries()
+    end
 end
 
 -- Injects Player 2's chosen item once the AI's own decision point is reached, mirroring
@@ -1429,7 +1481,9 @@ local function onShouldUseItem()
             pendingAction[battler] = nil
             steeringArmed[battler] = false
             player2Committed[battler] = true
-            flushPendingPlayerLogEntries()
+            if allEnemyBattlersCommitted() then
+                flushPendingPlayerLogEntries()
+            end
             return
         end
         console:error("[client] no AI classification for item " .. itemId .. " -- denying")
@@ -1477,7 +1531,9 @@ local function tryInjectMoveForBattler(battler)
     steeringArmed[battler] = false
 
     player2Committed[battler] = true
-    flushPendingPlayerLogEntries()
+    if allEnemyBattlersCommitted() then
+        flushPendingPlayerLogEntries()
+    end
 
     -- Log Player 2's move directly, using the move slot we just injected, rather than through the
     -- same gBattleCommunication-based edge-detection used for Player 1. That detector can fire for
@@ -1583,7 +1639,12 @@ local function checkBattleLog()
                     accumulateMoveLogDamage(currentlyResolvingBattler, previousHp - hp)
                 end
                 if hp == 0 then
-                    discardMoveLog(battler)
+                    local ownEntry = pendingMoveLog[battler]
+                    if ownEntry and ownEntry.started then
+                        flushMoveLog(battler)
+                    else
+                        discardMoveLog(battler)
+                    end
                 end
             end
         end

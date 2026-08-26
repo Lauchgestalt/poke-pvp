@@ -2,6 +2,7 @@ import { MOVE_NAMES } from './data/moveNames';
 import { SPECIES_NAMES } from './data/speciesNames';
 import type {
 	ActionChoice,
+	ActiveMon,
 	AuthResult,
 	Authenticate,
 	BattleEnded,
@@ -14,6 +15,12 @@ import type {
 	SetStreamEnabled,
 	SetStreamFps
 } from './types';
+
+export interface RevealedMon {
+	species: number;
+	nickname: string;
+	fainted: boolean;
+}
 
 const RECONNECT_DELAY_MS = 2000;
 const MAX_LOG_ENTRIES = 50;
@@ -43,6 +50,7 @@ class BattleConnection {
 		typeof localStorage !== 'undefined' ? localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) : null
 	);
 	latestFrameUrl = $state<string | null>(null);
+	p1Revealed = $state<Map<number, RevealedMon>>(new Map());
 
 	private ws: WebSocket | null = null;
 	private started = false;
@@ -95,6 +103,7 @@ class BattleConnection {
 			if (isBattleStarted(msg)) {
 				this.log = [];
 				this.battleState3 = null;
+				this.p1Revealed = new Map();
 				if (this.frameObjectUrl) URL.revokeObjectURL(this.frameObjectUrl);
 				this.frameObjectUrl = null;
 				this.latestFrameUrl = null;
@@ -104,6 +113,7 @@ class BattleConnection {
 				this.submitted = false;
 				this.submitted3 = false;
 				this.log = [];
+				this.p1Revealed = new Map();
 				this.status = 'connected -- waiting for a battle...';
 			} else if (isBattleState(msg)) {
 				if (msg.battlerSlot === 3) {
@@ -113,6 +123,8 @@ class BattleConnection {
 					this.battleState = msg;
 					if (msg.type === 'battle_state') this.submitted = false;
 				}
+				this.trackP1Mon(msg.playerActive);
+				if (msg.playerActive2) this.trackP1Mon(msg.playerActive2);
 				if (msg.type === 'battle_state') {
 					this.status = msg.mustSwitch
 						? 'your Pokemon fainted -- choose a replacement'
@@ -190,6 +202,14 @@ class BattleConnection {
 		this.send({ type: 'set_player2_name', name });
 	}
 
+	private trackP1Mon(mon: ActiveMon) {
+		const existing = this.p1Revealed.get(mon.species);
+		const fainted = mon.hp <= 0 || (existing?.fainted ?? false);
+		if (existing && existing.fainted === fainted && existing.nickname === mon.nickname) return;
+		this.p1Revealed.set(mon.species, { species: mon.species, nickname: mon.nickname, fainted });
+		this.p1Revealed = new Map(this.p1Revealed);
+	}
+
 	private pushLog(entry: string) {
 		this.log = [...this.log, entry].slice(-MAX_LOG_ENTRIES);
 	}
@@ -197,8 +217,7 @@ class BattleConnection {
 	private nameForBattler(battler: 0 | 1 | 2 | 3 | null): string | null {
 		if (battler === null) return null;
 		const isPlayerOne = battler === 0 || battler === 2;
-		const baseName = isPlayerOne ? (this.playerName ?? 'Player 1') : (this.myName ?? 'Player 2');
-		return battler === 2 || battler === 3 ? `${baseName} (right)` : baseName;
+		return isPlayerOne ? (this.playerName ?? 'Player 1') : (this.myName ?? 'Player 2');
 	}
 
 	private formatLogEntry(msg: BattleLog): string {
@@ -213,6 +232,9 @@ class BattleConnection {
 			const name = MOVE_NAMES[msg.moveId] ?? `Move #${msg.moveId}`;
 			if (msg.missed) {
 				return `${species} (${who}) used ${name}! But it missed!`;
+			}
+			if (msg.noEffect) {
+				return `${species} (${who}) used ${name}! But it had no effect!`;
 			}
 			const damageSuffix =
 				msg.damage === undefined

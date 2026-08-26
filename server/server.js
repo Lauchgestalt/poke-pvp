@@ -3,7 +3,7 @@ const http = require('http');
 const crypto = require('crypto');
 const path = require('path');
 const sirv = require('sirv');
-const { WebSocketServer } = require('ws');
+const { WebSocketServer, WebSocket } = require('ws');
 
 const EMULATOR_TCP_PORT = 8765;
 const WEB_PORT = 8766;
@@ -31,6 +31,18 @@ let lastPlayerNameLine = null;
 let lastStreamEnabledLine = null;
 let lastStreamFpsLine = null;
 let latestFrame = null; // most recent screenshot as a raw PNG Buffer
+
+
+function broadcastToPlayer2(payload) {
+  for (const ws of player2Sockets) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    try {
+      ws.send(payload);
+    } catch (err) {
+      console.log('[relay] failed to send to a player 2 socket:', err.message);
+    }
+  }
+}
 
 const tcpServer = net.createServer((socket) => {
   console.log('[relay] emulator connected');
@@ -76,18 +88,14 @@ const tcpServer = net.createServer((socket) => {
           continue;
         }
         latestFrame = frame;
-        for (const ws of player2Sockets) {
-          ws.send(frame);
-        }
+        broadcastToPlayer2(frame);
         continue;
       }
 
       if (line.includes('"type":"player_info"')) {
         lastPlayerInfoLine = line;
       }
-      for (const ws of player2Sockets) {
-        ws.send(line);
-      }
+      broadcastToPlayer2(line);
     }
   });
 

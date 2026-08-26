@@ -2,6 +2,7 @@
 	import { battle } from '$lib/battleConnection.svelte';
 	import { spriteSettings } from '$lib/spriteSettings.svelte';
 	import { streamSettings, MIN_STREAM_FPS, MAX_STREAM_FPS } from '$lib/streamSettings.svelte';
+	import { battleSettings } from '$lib/battleSettings.svelte';
 	import { SPRITE_STYLES } from '$lib/data/spriteStyles';
 	import { Settings } from '@lucide/svelte';
 
@@ -154,6 +155,23 @@
 					oninput={(e) => streamSettings.setFps(e.currentTarget.valueAsNumber)}
 					class="mt-1 h-1 w-full cursor-pointer appearance-none rounded-full bg-slate-700/50 accent-cyan-500 hover:bg-slate-700/70 disabled:cursor-not-allowed"
 				/>
+			</div>
+
+			<div class:opacity-50={battle.role !== 'controller'}>
+				<label class="flex items-center justify-between gap-2">
+					<span class="text-slate-500">Pick target before move</span>
+					<input
+						type="checkbox"
+						checked={battleSettings.targetFirstMode}
+						disabled={battle.role !== 'controller'}
+						onchange={(e) => battleSettings.setTargetFirstMode(e.currentTarget.checked)}
+						class="h-4 w-4 accent-cyan-500 disabled:cursor-not-allowed"
+					/>
+				</label>
+				<p class="mt-1 text-[11px] text-slate-600">
+					In double battles, only applies to move selection -- picks who to hit before you pick the
+					move, instead of confirming the target after.
+				</p>
 			</div>
 
 			<div>
